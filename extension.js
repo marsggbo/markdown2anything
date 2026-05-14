@@ -305,6 +305,26 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
+    case 'todoToggle': {
+      // 用户在预览中切换 Todo 复选框，同步更新 MD 文件
+      try {
+        const content = fs.readFileSync(mdPath, 'utf8');
+        let count = 0;
+        const updated = content.replace(/^(\s*[-*+]\s)\[( |x|X)\]/gm, (match, prefix) => {
+          if (count++ === msg.index) {
+            return prefix + (msg.checked ? '[x]' : '[ ]');
+          }
+          return match;
+        });
+        if (updated !== content) {
+          fs.writeFileSync(mdPath, updated, 'utf8');
+        }
+      } catch (e) {
+        log(`todoToggle 失败: ${e.message}`);
+      }
+      break;
+    }
+
     case 'exportHtml': {
       await handleConvert(vscode.Uri.file(mdPath));
       break;
@@ -768,7 +788,21 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       color: #ccc;
       border-bottom: 1px solid #333;
       flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
     }
+    .panel-close-btn {
+      background: none;
+      border: none;
+      color: #888;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 2px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .panel-close-btn:hover { color: #fff; }
     .side-panel-body {
       flex: 1;
       overflow-y: auto;
@@ -937,6 +971,43 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       font-size: 14px;
     }
 
+    /* ── Todo 任务列表 ── */
+    .article-wrapper .task-list-item {
+      list-style: none;
+      margin-left: -1.2em;
+      padding-left: 0.2em;
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+    .article-wrapper .task-checkbox {
+      cursor: pointer;
+      margin-top: 0.35em;
+      flex-shrink: 0;
+      width: 15px;
+      height: 15px;
+      accent-color: #07c160;
+    }
+
+    /* ── 缩放容器 ── */
+    .zoom-controls {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+    .zoom-controls .btn {
+      padding: 4px 9px;
+      font-size: 14px;
+    }
+    #zoom-value {
+      font-size: 12px;
+      color: #ccc;
+      min-width: 40px;
+      text-align: center;
+      user-select: none;
+    }
+
     /* ── 小红书图片输出 ── */
     .xhs-img-item {
       margin-bottom: 12px;
@@ -1000,6 +1071,12 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     ">
       <option value="">主题...</option>
     </select>
+    <div class="zoom-controls">
+      <button class="btn btn-secondary" id="btn-zoom-out" title="缩小预览">－</button>
+      <span id="zoom-value">100%</span>
+      <button class="btn btn-secondary" id="btn-zoom-in" title="放大预览">＋</button>
+      <button class="btn btn-secondary" id="btn-zoom-reset" title="重置缩放" style="padding:4px 7px;">↺</button>
+    </div>
     <button class="btn btn-primary" id="btn-copy" title="选中并复制预览区域内容，可直接粘贴到微信公众号编辑器">
       📋 复制微信
     </button>
@@ -1031,7 +1108,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     <!-- 样式编辑面板 -->
     <div class="side-panel" id="style-panel">
-      <div class="side-panel-header">🎨 自定义样式</div>
+      <div class="side-panel-header">🎨 自定义样式<button class="panel-close-btn" data-close-panel="style-panel" data-close-state="stylePanelOpen">×</button></div>
       <div class="side-panel-body">
         <p class="hint">在此输入 CSS，将作用于预览区域内的文章内容。<br>样式在当前会话内保持，不会影响导出文件。</p>
         <label>自定义 CSS</label>
@@ -1048,7 +1125,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     <!-- 上传面板 -->
     <div class="side-panel" id="upload-panel">
-      <div class="side-panel-header">☁️ 上传到微信公众号</div>
+      <div class="side-panel-header">☁️ 上传到微信公众号<button class="panel-close-btn" data-close-panel="upload-panel" data-close-state="uploadPanelOpen">×</button></div>
       <div class="side-panel-body">
         <!-- 配置区 -->
         <div id="config-section">
@@ -1092,7 +1169,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     <!-- 小红书面板 -->
     <div class="side-panel xhs-panel" id="xhs-panel">
       <div class="resize-handle" id="xhs-resize-handle"></div>
-      <div class="side-panel-header">📸 导出小红书</div>
+      <div class="side-panel-header">📸 导出小红书<button class="panel-close-btn" data-close-panel="xhs-panel" data-close-state="xhsPanelOpen">×</button></div>
       <div class="side-panel-body">
         <p class="hint">将文章渲染为多张适合小红书发布的图片。首次使用会自动下载 Chromium（约 150MB），之后无需等待。</p>
 
@@ -1138,10 +1215,10 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     // ─── 状态 ───
     let currentTitle = '';
     let currentBodyHtml = '';
-    let stylePanelOpen = false;
-    let uploadPanelOpen = false;
-    let xhsPanelOpen = false;
     let currentThemeBg = '#ffffff';
+    let currentZoom = 100;
+    // 用对象统一管理面板开关状态，避免 let 变量与 window 属性不同步的 bug
+    const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false };
 
     const XHS_DEFAULTS = { width: 1080, height: 1440, padding: 40, tolerance: 15 };
 
@@ -1394,15 +1471,22 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       });
     })();
 
-    function togglePanel(panelId, stateVar, closeOtherIds) {
+    function closePanel(panelId, stateKey) {
+      panelState[stateKey] = false;
+      const el = document.getElementById(panelId);
+      if (el) el.classList.remove('open');
+      updateBtnActive();
+    }
+
+    function togglePanel(panelId, stateKey, closeOtherIds) {
       const panel  = document.getElementById(panelId);
-      const newVal = !window[stateVar];
-      window[stateVar] = newVal;
+      const newVal = !panelState[stateKey];
+      panelState[stateKey] = newVal;
       panel.classList.toggle('open', newVal);
       // 关闭其他面板
       (closeOtherIds || []).forEach(id => {
         const other = document.getElementById(id.panelId);
-        window[id.stateVar] = false;
+        panelState[id.stateKey] = false;
         if (other) other.classList.remove('open');
       });
       updateBtnActive();
@@ -1410,12 +1494,21 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     function updateBtnActive() {
       document.getElementById('btn-style').className =
-        'btn ' + (stylePanelOpen ? 'btn-active' : 'btn-secondary');
+        'btn ' + (panelState.stylePanelOpen ? 'btn-active' : 'btn-secondary');
       document.getElementById('btn-upload').className =
-        'btn ' + (uploadPanelOpen ? 'btn-active' : 'btn-upload');
+        'btn ' + (panelState.uploadPanelOpen ? 'btn-active' : 'btn-upload');
       document.getElementById('btn-xhs').className =
-        'btn ' + (xhsPanelOpen ? 'btn-active' : 'btn-xhs');
+        'btn ' + (panelState.xhsPanelOpen ? 'btn-active' : 'btn-xhs');
     }
+
+    // 面板关闭按钮（事件委托）
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('.panel-close-btn');
+      if (!btn) return;
+      const panelId  = btn.dataset.closePanel;
+      const stateKey = btn.dataset.closeState;
+      if (panelId && stateKey) closePanel(panelId, stateKey);
+    });
 
     // ─── 按钮事件 ───
 
@@ -1434,13 +1527,13 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     document.getElementById('btn-style').addEventListener('click', () => {
       togglePanel('style-panel', 'stylePanelOpen',
-        [{panelId:'upload-panel',stateVar:'uploadPanelOpen'},{panelId:'xhs-panel',stateVar:'xhsPanelOpen'}]);
+        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'}]);
     });
 
     document.getElementById('btn-upload').addEventListener('click', () => {
       togglePanel('upload-panel', 'uploadPanelOpen',
-        [{panelId:'style-panel',stateVar:'stylePanelOpen'},{panelId:'xhs-panel',stateVar:'xhsPanelOpen'}]);
-      if (uploadPanelOpen) {
+        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'}]);
+      if (panelState.uploadPanelOpen) {
         const titleInput = document.getElementById('input-title');
         if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
         vscode.postMessage({ type: 'getConfig' });
@@ -1449,7 +1542,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     document.getElementById('btn-xhs').addEventListener('click', () => {
       togglePanel('xhs-panel', 'xhsPanelOpen',
-        [{panelId:'style-panel',stateVar:'stylePanelOpen'},{panelId:'upload-panel',stateVar:'uploadPanelOpen'}]);
+        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'}]);
     });
 
     document.getElementById('btn-xhs-python').addEventListener('click', () => {
@@ -1726,6 +1819,35 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           res.style.display = 'block';
           break;
         }
+      }
+    });
+
+    // ─── 缩放控制 ───
+    function setZoom(zoom) {
+      currentZoom = Math.max(30, Math.min(200, zoom));
+      const el = document.getElementById('preview-content');
+      if (el) el.style.zoom = currentZoom + '%';
+      const zv = document.getElementById('zoom-value');
+      if (zv) zv.textContent = currentZoom + '%';
+    }
+    document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(currentZoom - 10));
+    document.getElementById('btn-zoom-in').addEventListener('click',  () => setZoom(currentZoom + 10));
+    document.getElementById('btn-zoom-reset').addEventListener('click', () => setZoom(100));
+
+    // 鼠标滚轮 + Ctrl 快捷缩放
+    document.getElementById('preview-content').addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      setZoom(currentZoom + (e.deltaY < 0 ? 10 : -10));
+    }, { passive: false });
+
+    // ─── Todo 任务列表交互 ───
+    document.getElementById('preview-content').addEventListener('change', (e) => {
+      if (!e.target.classList.contains('task-checkbox')) return;
+      const all = Array.from(document.querySelectorAll('#preview-content .task-checkbox'));
+      const index = all.indexOf(e.target);
+      if (index >= 0) {
+        vscode.postMessage({ type: 'todoToggle', index, checked: e.target.checked });
       }
     });
 
