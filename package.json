@@ -1,8 +1,8 @@
 {
   "name": "md2wechat",
-  "displayName": "MD2WeChat - Markdown 转微信公众号",
-  "description": "将 Markdown 转换为微信公众号排版，支持 LaTeX 公式渲染、实时预览、一键复制和直接上传草稿箱",
-  "version": "1.9.1",
+  "displayName": "MD Export - Markdown 导出微信/知乎/小红书",
+  "description": "将 Markdown 一键导出到微信公众号/知乎/小红书，支持 LaTeX 公式、10 套主题、实时预览、小红书截图导出",
+  "version": "1.9.2",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",
@@ -21,10 +21,13 @@
     "markdown",
     "wechat",
     "微信公众号",
+    "小红书",
+    "知乎",
     "公式",
     "LaTeX",
     "KaTeX",
-    "preview"
+    "preview",
+    "export"
   ],
   "repository": {
     "type": "git",
