@@ -364,7 +364,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       // 用 Node.js + Playwright 截图（无需 Python，自动检测/安装 Chromium）
       const { spawn } = require('child_process');
       const os = require('os');
-      const { width = 1080, height = 1440, padding = 40, bg = '#ffffff' } = msg;
+      const { width = 1080, height = 1440, padding = 40, bg = '#ffffff', autoExport = false } = msg;
 
       // 生成独立渲染 HTML
       const { bodyHtml } = renderMarkdown(mdPath);
@@ -372,7 +372,10 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       const htmlContent = buildXhsRenderHtml(bodyHtml, path.dirname(mdPath), theme);
       const tmpHtml = path.join(os.tmpdir(), `md2wechat_xhs_${Date.now()}.html`);
       const base = path.basename(mdPath, path.extname(mdPath));
-      const outDir = path.join(path.dirname(mdPath), `${base}_xhs`);
+      // 生成预览时保存到系统临时目录，一键导出时才保存到项目目录
+      const outDir = autoExport
+        ? path.join(path.dirname(mdPath), `${base}_xhs`)
+        : path.join(os.tmpdir(), `md2wechat_xhs_preview_${Date.now()}`);
       fs.writeFileSync(tmpHtml, htmlContent, 'utf8');
 
       const scriptPath = path.join(extContext.extensionUri.fsPath, 'scripts', 'xhs_screenshot.js');
@@ -428,7 +431,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
             return `data:image/png;base64,${buf.toString('base64')}`;
           });
 
-          panel.webview.postMessage({ type: 'xhsPythonDone', dataUrls, outDir });
+          panel.webview.postMessage({ type: 'xhsPythonDone', dataUrls, outDir, autoExport });
         });
 
         proc.on('error', (err) => {
@@ -443,9 +446,9 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     case 'saveXhsImages': {
       try {
         const dataUrls = msg.dataUrls || [];
-        // 目录：同 MD 文件名去后缀 + '_img'
+        // 目录：同 MD 文件名去后缀 + '_xhs'
         const base = path.basename(mdPath, path.extname(mdPath));
-        const dir = path.join(path.dirname(mdPath), `${base}_img`);
+        const dir = path.join(path.dirname(mdPath), `${base}_xhs`);
         if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
         dataUrls.forEach((dataUrl, i) => {
           const b64 = dataUrl.replace(/^data:image\/png;base64,/, '');
@@ -794,7 +797,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     .xhs-panel .resize-handle {
       position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
       cursor: col-resize; background: transparent; z-index: 10;
+      display: none; /* 默认隐藏，避免与 VS Code 原生边框重叠 */
     }
+    .xhs-panel.open .resize-handle { display: block; } /* 仅面板打开时显示 */
     .xhs-panel .resize-handle:hover { background: #0078d4; }
     .side-panel-header {
       padding: 12px 16px;
@@ -1204,11 +1209,11 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         <input type="number" id="xhs-tolerance" value="15" min="0" max="100">
 
         <div class="panel-actions" style="margin-top:14px;">
-          <button class="btn btn-xhs" id="btn-xhs-python">📸 生成图片</button>
+          <button class="btn btn-xhs" id="btn-xhs-python" title="仅生成预览图，不保存到项目目录">📸 生成预览</button>
           <button class="btn btn-secondary" id="btn-xhs-reset">恢复默认</button>
         </div>
         <div class="panel-actions" style="margin-top:8px;">
-          <button class="btn btn-secondary" id="btn-xhs-export-all" disabled title="先生成图片，再一键导出到 MD 同名目录">💾 一键导出全部</button>
+          <button class="btn btn-xhs" id="btn-xhs-export-all" title="生成图片并保存到 MD 同名 _xhs 目录（若已生成预览则直接保存）">💾 一键导出全部</button>
         </div>
 
         <div id="xhs-output" style="margin-top:14px;"></div>
@@ -1574,9 +1579,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       const bgColor = currentThemeBg || '#ffffff';
       const btn = document.getElementById('btn-xhs-python');
       btn.disabled = true; btn.textContent = '⏳ 渲染中...';
-      document.getElementById('btn-xhs-export-all').disabled = true;
       document.getElementById('xhs-output').innerHTML = '<p class="hint">⏳ 正在生成，请稍候...</p>';
-      vscode.postMessage({ type: 'generateXhsViaPython', width: imgW, height: imgH, padding: pad, bg: bgColor });
+      // autoExport: false → 仅生成预览，保存到临时目录
+      vscode.postMessage({ type: 'generateXhsViaPython', width: imgW, height: imgH, padding: pad, bg: bgColor, autoExport: false });
     });
 
     document.getElementById('btn-xhs-reset').addEventListener('click', () => {
@@ -1589,10 +1594,23 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     document.getElementById('btn-xhs-export-all').addEventListener('click', () => {
       const slices = window._xhsLastSlices;
-      if (!slices || !slices.length) { showToast('请先生成图片', 'error'); return; }
       const btn = document.getElementById('btn-xhs-export-all');
-      btn.disabled = true; btn.textContent = '💾 导出中...';
-      vscode.postMessage({ type: 'saveXhsImages', dataUrls: slices });
+      if (slices && slices.length) {
+        // 已有预览，直接保存
+        btn.disabled = true; btn.textContent = '💾 导出中...';
+        vscode.postMessage({ type: 'saveXhsImages', dataUrls: slices });
+      } else {
+        // 未生成预览，先生成再自动保存（autoExport: true）
+        const imgW   = parseInt(document.getElementById('xhs-width').value)     || XHS_DEFAULTS.width;
+        const imgH   = parseInt(document.getElementById('xhs-height').value)    || XHS_DEFAULTS.height;
+        const pad    = parseInt(document.getElementById('xhs-padding').value);
+        const bgColor = currentThemeBg || '#ffffff';
+        btn.disabled = true; btn.textContent = '⏳ 生成并导出中...';
+        document.getElementById('btn-xhs-python').disabled = true;
+        document.getElementById('btn-xhs-python').textContent = '⏳ 渲染中...';
+        document.getElementById('xhs-output').innerHTML = '<p class="hint">⏳ 正在生成，请稍候...</p>';
+        vscode.postMessage({ type: 'generateXhsViaPython', width: imgW, height: imgH, padding: pad, bg: bgColor, autoExport: true });
+      }
     });
 
     // 知乎复制
@@ -1819,16 +1837,25 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         }
         case 'xhsPythonDone': {
           const btn = document.getElementById('btn-xhs-python');
-          btn.disabled = false; btn.textContent = '� 生成图片';
+          btn.disabled = false; btn.textContent = '📸 生成预览';
           window._xhsLastSlices = msg.dataUrls;
           showXhsOutput(msg.dataUrls);
           document.getElementById('btn-xhs-export-all').disabled = false;
-          showToast(\`✅ 生成 \${msg.dataUrls.length} 张，已保存到 \${msg.outDir}\`, 'success', 5000);
+          if (msg.autoExport) {
+            // 一键导出全部触发的生成：自动保存
+            document.getElementById('btn-xhs-export-all').disabled = true;
+            document.getElementById('btn-xhs-export-all').textContent = '💾 导出中...';
+            vscode.postMessage({ type: 'saveXhsImages', dataUrls: msg.dataUrls });
+          } else {
+            showToast(\`✅ 生成 \${msg.dataUrls.length} 张预览图，点击「一键导出全部」保存到本地\`, 'success', 5000);
+          }
           break;
         }
         case 'xhsPythonError': {
           const btn = document.getElementById('btn-xhs-python');
-          btn.disabled = false; btn.textContent = '📸 生成图片';
+          btn.disabled = false; btn.textContent = '📸 生成预览';
+          document.getElementById('btn-xhs-export-all').disabled = false;
+          document.getElementById('btn-xhs-export-all').textContent = '💾 一键导出全部';
           const errMsg = msg.message || '未知错误';
           document.getElementById('xhs-output').innerHTML =
             \`<p class="hint" style="color:#f88">❌ \${errMsg}</p>\`;
@@ -1838,12 +1865,14 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         case 'saveXhsImagesDone': {
           const btn = document.getElementById('btn-xhs-export-all');
           btn.disabled = false; btn.textContent = '💾 一键导出全部';
+          document.getElementById('btn-xhs-python').disabled = false;
           showToast(\`✅ 已导出 \${msg.count} 张到 \${msg.dir}\`, 'success', 4000);
           break;
         }
         case 'saveXhsImagesError': {
           const btn = document.getElementById('btn-xhs-export-all');
           btn.disabled = false; btn.textContent = '💾 一键导出全部';
+          document.getElementById('btn-xhs-python').disabled = false;
           showToast('导出失败：' + (msg.message || '未知错误'), 'error');
           break;
         }
