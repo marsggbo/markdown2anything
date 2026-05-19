@@ -793,14 +793,19 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       flex-shrink: 0;
     }
     .side-panel.open { width: 340px; }
-    .xhs-panel.open  { width: 480px; min-width: 340px; max-width: 80vw; position: relative; }
+    .xhs-panel.open  { width: 480px; min-width: 340px; max-width: calc(100% - 220px); position: relative; }
     .xhs-panel .resize-handle {
-      position: absolute; left: 0; top: 0; bottom: 0; width: 5px;
-      cursor: col-resize; background: transparent; z-index: 10;
-      display: none; /* 默认隐藏，避免与 VS Code 原生边框重叠 */
+      position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
+      cursor: col-resize; background: rgba(255,255,255,0.06); z-index: 10;
+      display: none;
     }
-    .xhs-panel.open .resize-handle { display: block; } /* 仅面板打开时显示 */
+    .xhs-panel.open .resize-handle { display: block; }
     .xhs-panel .resize-handle:hover { background: #0078d4; }
+    .xhs-panel .resize-handle::after {
+      content: ''; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
+      width: 2px; height: 40px; background: #555; border-radius: 2px;
+    }
+    .xhs-panel .resize-handle:hover::after { background: #0078d4; }
     .side-panel-header {
       padding: 12px 16px;
       font-size: 13px;
@@ -1478,19 +1483,32 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       }
     }
 
-    // XHS 面板拖拽调宽
+    // XHS 面板拖拽调宽（限制最大宽度，确保预览区始终可见）
     (function initResize() {
       const handle = document.getElementById('xhs-resize-handle');
       const panel  = document.getElementById('xhs-panel');
       if (!handle || !panel) return;
+      const XHS_DEFAULT_W = 480;
+      const XHS_MIN_W = 340;
       let startX, startW;
+      function getMaxW() {
+        // 预览区至少保留 220px
+        return Math.max(XHS_MIN_W, (panel.parentElement ? panel.parentElement.offsetWidth : window.innerWidth) - 220);
+      }
       handle.addEventListener('mousedown', function(e) {
         startX = e.clientX; startW = panel.offsetWidth;
         e.preventDefault();
-        function onMove(ev) { panel.style.width = Math.max(340, startW - (ev.clientX - startX)) + 'px'; }
+        function onMove(ev) {
+          const w = Math.min(getMaxW(), Math.max(XHS_MIN_W, startW - (ev.clientX - startX)));
+          panel.style.width = w + 'px';
+        }
         function onUp() { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); }
         document.addEventListener('mousemove', onMove);
         document.addEventListener('mouseup', onUp);
+      });
+      // 双击 handle 重置为默认宽度
+      handle.addEventListener('dblclick', function() {
+        panel.style.width = XHS_DEFAULT_W + 'px';
       });
     })();
 
