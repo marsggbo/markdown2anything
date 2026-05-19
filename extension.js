@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 
-const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtml } = require('./lib/converter');
+const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtml } = require('./lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('./lib/themes');
 
 // ─────────────────────────────────────────────
@@ -501,6 +501,19 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
+    case 'getXhsCopyHtml': {
+      try {
+        const { bodyHtml } = renderMarkdown(mdPath);
+        const theme = getTheme(currentThemeId);
+        const html = buildXhsCopyHtml(bodyHtml, theme);
+        panel.webview.postMessage({ type: 'xhsCopyHtml', html });
+      } catch (err) {
+        log(`buildXhsCopyHtml 失败: ${err.message}`);
+        panel.webview.postMessage({ type: 'xhsCopyHtmlError', message: err.message });
+      }
+      break;
+    }
+
     case 'setTheme': {
       currentThemeId = msg.themeId || DEFAULT_THEME_ID;
       // 重新渲染预览
@@ -737,6 +750,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     .btn-zhihu:hover     { background: #0052cc; }
     .btn-xhs       { background: #ff2442; color: #fff; }
     .btn-xhs:hover       { background: #d91c38; }
+    .btn-xhs-copy  { background: #ff6080; color: #fff; }
+    .btn-xhs-copy:hover  { background: #e04060; }
     .btn:disabled  { opacity: 0.5; cursor: not-allowed; }
 
     /* ── 主区域 ── */
@@ -1085,6 +1100,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     </button>
     <button class="btn btn-xhs" id="btn-xhs" title="将文章渲染为多张图片导出，适合发布小红书">
       📸 导出小红书
+    </button>
+    <button class="btn btn-xhs-copy" id="btn-xhs-copy" title="复制适合粘贴到小红书长文编辑器的内容（文字格式保留；图片需在小红书编辑器内手动上传）">
+      📱 复制小红书
     </button>
     <button class="btn btn-secondary" id="btn-style" title="打开 CSS 样式编辑器">
       🎨 修改样式
@@ -1474,7 +1492,10 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     function closePanel(panelId, stateKey) {
       panelState[stateKey] = false;
       const el = document.getElementById(panelId);
-      if (el) el.classList.remove('open');
+      if (el) {
+        el.classList.remove('open');
+        el.style.width = ''; // 清除 resize handle 设置的内联 width，避免覆盖 CSS width:0
+      }
       updateBtnActive();
     }
 
@@ -1483,11 +1504,12 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       const newVal = !panelState[stateKey];
       panelState[stateKey] = newVal;
       panel.classList.toggle('open', newVal);
+      if (!newVal) panel.style.width = ''; // 关闭时清除内联 width
       // 关闭其他面板
       (closeOtherIds || []).forEach(id => {
         const other = document.getElementById(id.panelId);
         panelState[id.stateKey] = false;
-        if (other) other.classList.remove('open');
+        if (other) { other.classList.remove('open'); other.style.width = ''; }
       });
       updateBtnActive();
     }
@@ -1578,6 +1600,13 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       const btn = document.getElementById('btn-zhihu');
       btn.disabled = true; btn.textContent = '⏳ 处理中...';
       vscode.postMessage({ type: 'getZhihuHtml' });
+    });
+
+    // 小红书长文复制
+    document.getElementById('btn-xhs-copy').addEventListener('click', () => {
+      const btn = document.getElementById('btn-xhs-copy');
+      btn.disabled = true; btn.textContent = '⏳ 处理中...';
+      vscode.postMessage({ type: 'getXhsCopyHtml' });
     });
 
     document.getElementById('btn-export').addEventListener('click', () => {
@@ -1746,6 +1775,41 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         case 'zhihuHtmlError': {
           const btn = document.getElementById('btn-zhihu');
           btn.disabled = false; btn.textContent = '📝 复制知乎';
+          showToast('复制失败：' + (msg.message || '未知错误'), 'error');
+          break;
+        }
+        case 'xhsCopyHtml': {
+          const btn = document.getElementById('btn-xhs-copy');
+          btn.disabled = false; btn.textContent = '📱 复制小红书';
+          const html = msg.html || '';
+          const doCopy = () => {
+            if (navigator.clipboard && window.ClipboardItem) {
+              navigator.clipboard.write([new ClipboardItem({
+                'text/html':  new Blob([html], {type:'text/html'}),
+                'text/plain': new Blob([document.getElementById('preview-content').innerText||''], {type:'text/plain'}),
+              })]).then(() => showToast('✅ 已复制！粘贴到小红书长文编辑器即可（图片需手动上传）', 'success', 4000))
+                 .catch(fallback);
+            } else { fallback(); }
+            function fallback() {
+              const tmp = document.createElement('div');
+              tmp.style.cssText = 'position:fixed;left:-9999px;top:0;';
+              tmp.innerHTML = html;
+              document.body.appendChild(tmp);
+              const sel = window.getSelection();
+              const range = document.createRange();
+              range.selectNodeContents(tmp);
+              sel.removeAllRanges(); sel.addRange(range);
+              try { document.execCommand('copy'); showToast('✅ 已复制！粘贴到小红书长文编辑器即可（图片需手动上传）', 'success', 4000); }
+              catch(_) { showToast('复制失败，请手动选择复制', 'error'); }
+              sel.removeAllRanges(); document.body.removeChild(tmp);
+            }
+          };
+          doCopy();
+          break;
+        }
+        case 'xhsCopyHtmlError': {
+          const btn = document.getElementById('btn-xhs-copy');
+          btn.disabled = false; btn.textContent = '📱 复制小红书';
           showToast('复制失败：' + (msg.message || '未知错误'), 'error');
           break;
         }

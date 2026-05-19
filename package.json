@@ -2,7 +2,7 @@
   "name": "md2wechat",
   "displayName": "MD2WeChat - Markdown 转微信公众号",
   "description": "将 Markdown 转换为微信公众号排版，支持 LaTeX 公式渲染、实时预览、一键复制和直接上传草稿箱",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",
