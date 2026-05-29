@@ -44,3 +44,10 @@ node_modules/highlight.js/scss/
 
 # ── katex：只需 dist/（CSS+字体），不需要 TS 源码 ─────────────────────────────
 node_modules/katex/src/
+
+# ── Electron 客户端（VS Code 插件不需要） ─────────────────────────────────────
+electron/
+electron-builder.yml
+node_modules/electron/
+node_modules/electron-builder/
+node_modules/@electron/

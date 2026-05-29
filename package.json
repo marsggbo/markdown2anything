@@ -141,9 +141,14 @@
   "scripts": {
     "package": "vsce package",
     "install-ext": "vsce package && \"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code\" --install-extension \"md2wechat-$(node -p \"require('./package.json').version\").vsix\"",
-    "publish": "vsce publish"
+    "publish": "vsce publish",
+    "start:electron": "electron ./electron/main.js",
+    "build:mac": "electron-builder --mac",
+    "build:mac:universal": "electron-builder --mac --universal"
   },
   "devDependencies": {
-    "@vscode/vsce": "^3.9.1"
+    "@vscode/vsce": "^3.9.1",
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3"
   }
 }

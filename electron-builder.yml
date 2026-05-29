@@ -1,0 +1,30 @@
+appId: com.marsggbo.md2wechat
+productName: MD2WeChat
+copyright: MIT
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - electron/**/*
+  - lib/**/*
+  - scripts/**/*
+  - templates/**/*
+  - package.json
+  - node_modules/**/*
+
+mac:
+  target:
+    - dmg
+    - zip
+  # icon: icon.png
+  category: public.app-category.productivity
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+extraMetadata:
+  main: electron/main.js
+
+asar: true
+asarUnpack:
+  - scripts/xhs_screenshot.js
