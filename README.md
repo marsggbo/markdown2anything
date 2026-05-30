@@ -2,6 +2,8 @@
 
 > 将 Markdown 文章一键渲染并导出到多个平台，支持 **LaTeX 公式**、**10 套内置主题**、**实时预览**、**一键复制（微信 / 知乎 / 小红书）**、**小红书图片截图导出** 和 **直接上传微信草稿箱**。
 
+支持两种形态：**VS Code 插件** 和 **独立桌面客户端**（Electron），互不依赖，按需选择。
+
 ---
 
 ## 功能特性
@@ -53,6 +55,64 @@ code --install-extension md2wechat-1.9.1.vsix
 ### 方式三：VS Code 扩展市场
 
 在扩展市场搜索 `MD Export` 或 `marsggbo.md2wechat` 一键安装。
+
+---
+
+## 独立桌面客户端（无需 VS Code）
+
+如果你不使用 VS Code，可以直接使用独立的桌面应用。基于 **Electron** 构建，**完全免费、无需安装 VS Code**。
+
+### 从源码运行
+
+```bash
+# 克隆仓库
+git clone https://github.com/marsggbo/md2wechat.git
+cd md2wechat
+
+# 安装依赖
+npm install
+
+# 启动桌面应用
+npm run start:electron
+```
+
+### 打包为 macOS 应用
+
+```bash
+# 打包为 DMG 安装包
+npm run build:mac
+
+# 或打包为通用二进制（Intel + Apple Silicon）
+npm run build:mac:universal
+```
+
+打包产物在 `dist/` 目录下，双击 `.dmg` 安装即可。
+
+### 桌面客户端功能
+
+桌面客户端与 VS Code 插件功能完全一致：
+
+- 📝 左侧 Markdown 编辑器 + 右侧实时预览（500ms 防抖刷新）
+- 🎨 10 套内置主题实时切换
+- 📋 一键复制到微信 / 知乎 / 小红书
+- 📸 Playwright 截图导出小红书图片
+- ☁️ 上传微信公众号草稿箱（FastPen）
+- 💾 导出内联样式 HTML 文件
+- ⌨️ 快捷键支持（`Cmd+O` 打开、`Cmd+S` 保存、`Cmd+N` 新建）
+
+> **注意**：桌面客户端与 VS Code 插件共用同一套核心转换库（`lib/converter.js`），功能完全一致，但**彼此独立运行**。
+
+### 编译目标选择
+
+| 命令 | 产物 | 适用场景 |
+|------|------|----------|
+| `npm run package` | `.vsix` | VS Code 插件安装 |
+| `npm run build:mac` | `.dmg` | macOS 独立桌面应用 |
+| `npm run start:electron` | 开发模式 | 本地开发调试 |
+
+两种编译目标互不干扰：
+- VS Code 插件打包时自动排除 `electron/` 目录，保持体积小
+- Electron 打包时通过 `extraMetadata` 覆盖入口为 `electron/main.js`
 
 ---
 
@@ -246,9 +306,18 @@ juice 内联 CSS（仅导出模式）
 ```
 md2wechat/
 ├── extension.js          # VS Code 扩展主入口
-├── package.json          # 扩展清单
+├── package.json          # 扩展清单 + Electron 脚本
+├── electron-builder.yml  # Electron 打包配置
 ├── lib/
-│   └── converter.js      # 核心转换逻辑
+│   ├── converter.js      # 核心转换逻辑（插件/客户端共用）
+│   └── themes.js         # 10 套内置主题定义
+├── electron/             # Electron 客户端
+│   ├── main.js           # 主进程（窗口/IPC/文件操作）
+│   ├── preload.js        # 安全的 context bridge
+│   └── renderer/
+│       └── index.html    # 渲染进程（编辑器 + 预览 UI）
+├── scripts/
+│   └── xhs_screenshot.js # Playwright 截图脚本
 ├── templates/
 │   └── wechat.html       # 默认微信模板
 └── README.md
