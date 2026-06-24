@@ -112,21 +112,54 @@ async function main() {
   });
 
   try {
-    // ── 1. Playwright 渲染并截全页（与 Python 版完全一致） ─────────────────
-    const page = await browser.newPage({ viewport: { width: imgW, height: 900 } });
+    // ── 1. Playwright 渲染，用滚动拼接替代 fullPage 截图 ─────────────────────
+    // Chromium canvas 高度上限约 16384px，fullPage: true 会在超高页面上静默截断。
+    // 改用分段滚动截图后拼接，突破该限制。
+    const TILE_H = 4096; // 每段视口高度（px）
+    const page = await browser.newPage({ viewport: { width: imgW, height: TILE_H } });
     const fileUrl = 'file://' + path.resolve(htmlFile);
     await page.goto(fileUrl, { waitUntil: 'networkidle', timeout: 30000 });
     await page.waitForTimeout(800);
 
-    console.log('INFO:正在截取全页…');
-    const screenshotBuf = await page.screenshot({ fullPage: true, type: 'png' });
-    console.log(`INFO:截图完成 (${(screenshotBuf.length / 1024).toFixed(1)} KB)，开始分割`);
+    // 取页面实际总高度
+    const totalPageH = await page.evaluate(() => document.documentElement.scrollHeight);
+    console.log(`INFO:页面总高度 ${totalPageH}px，开始分段截图…`);
 
-    // ── 2. 用 pngjs 解码 PNG 为原始像素 ──────────────────────────────────────
-    const img = PNG.sync.read(screenshotBuf);
-    const W = img.width;
-    const H = img.height;
-    const data = img.data; // RGBA Buffer
+    // 逐段截图
+    // 关键：浏览器限制滚动位置不超过 (scrollHeight - viewportHeight)，所以最后一段
+    // 的实际 scrollY 可能比期望值小，需要读取实际值再决定取哪些行。
+    const tiles = [];
+    let targetY = 0;
+    while (targetY < totalPageH) {
+      await page.evaluate(y => window.scrollTo(0, y), targetY);
+      await page.waitForTimeout(80);
+      const actualY = await page.evaluate(() => window.scrollY);
+      const tileBuf = await page.screenshot({ type: 'png' });
+      const tile = PNG.sync.read(tileBuf);
+      // 本段截图对应页面 [actualY, actualY + TILE_H)，取其中属于 [targetY, totalPageH) 的行
+      const rowStart = targetY - actualY;           // 本段截图中，targetY 对应的行号
+      const rowEnd   = Math.min(TILE_H, totalPageH - actualY); // 本段截图中，页面末尾对应的行号
+      const validH   = rowEnd - rowStart;
+      tiles.push({ png: tile, rowStart, validH });
+      console.log(`INFO:已截 targetY=${targetY} actualY=${actualY} rowStart=${rowStart} validH=${validH}`);
+      targetY += TILE_H;
+    }
+
+    // 拼接所有 tile 为一张完整图
+    const W = tiles[0].png.width;
+    const H = tiles.reduce((s, t) => s + t.validH, 0);
+    console.log(`INFO:截图完成，拼接尺寸 ${W}x${H}，开始分割`);
+    const combined = new PNG({ width: W, height: H });
+    let dstY = 0;
+    for (const { png, rowStart, validH } of tiles) {
+      for (let row = 0; row < validH; row++) {
+        const srcOff = (rowStart + row) * W * 4;
+        const dstOff = (dstY + row) * W * 4;
+        png.data.copy(combined.data, dstOff, srcOff, srcOff + W * 4);
+      }
+      dstY += validH;
+    }
+    const data = combined.data;
 
     // ── 3. 添加上下 padding（与 Python 版 Image.new + paste 一致）──────────
     const padH = H + 2 * padding;
