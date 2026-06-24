@@ -1,8 +1,8 @@
 {
-  "name": "md2wechat",
-  "displayName": "MD Export - Markdown 导出微信/知乎/小红书",
-  "description": "将 Markdown 一键导出到微信公众号/知乎/小红书，支持 LaTeX 公式、10 套主题、实时预览、小红书截图导出",
-  "version": "1.9.2",
+  "name": "markdown2anything",
+  "displayName": "Markdown2Anything - Markdown 导出微信/知乎/小红书（原 md2wechat 升级版）",
+  "description": "将 Markdown 一键导出到微信公众号/知乎/小红书，支持 LaTeX 公式、目录预览、10 套主题、实时预览、小红书截图导出（原 md2wechat 插件升级版）",
+  "version": "2.0.0",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",
@@ -20,6 +20,8 @@
   "keywords": [
     "markdown",
     "wechat",
+    "md2wechat",
+    "markdown2anything",
     "微信公众号",
     "小红书",
     "知乎",
@@ -27,11 +29,13 @@
     "LaTeX",
     "KaTeX",
     "preview",
-    "export"
+    "export",
+    "toc",
+    "目录"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/marsggbo/md2wechat"
+    "url": "https://github.com/marsggbo/markdown2anything"
   },
   "main": "./extension.js",
   "activationEvents": [
@@ -45,7 +49,10 @@
         "command": "md2wechat.preview",
         "title": "预览微信公众号效果",
         "category": "md2wechat",
-        "icon": "$(open-preview)"
+        "icon": {
+          "light": "./images/preview-icon.svg",
+          "dark": "./images/preview-icon.svg"
+        }
       },
       {
         "command": "md2wechat.convert",
@@ -140,7 +147,7 @@
   },
   "scripts": {
     "package": "vsce package",
-    "install-ext": "vsce package && \"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code\" --install-extension \"md2wechat-$(node -p \"require('./package.json').version\").vsix\"",
+    "install-ext": "vsce package && \"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code\" --install-extension \"markdown2anything-$(node -p \"require('./package.json').version\").vsix\"",
     "publish": "vsce publish",
     "start:electron": "electron ./electron/main.js",
     "build:mac": "electron-builder --mac",

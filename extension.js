@@ -33,8 +33,8 @@ let currentThemeId = DEFAULT_THEME_ID;
 
 function activate(context) {
   extContext = context;
-  outputChannel = vscode.window.createOutputChannel('MD2WeChat');
-  log('MD2WeChat 插件已激活');
+  outputChannel = vscode.window.createOutputChannel('Markdown2Anything');
+  log('Markdown2Anything 插件已激活');
 
   context.subscriptions.push(
     vscode.commands.registerCommand('md2wechat.preview', handlePreview),
@@ -1083,19 +1083,73 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       border-radius: 4px;
       box-shadow: 0 8px 32px rgba(0,0,0,.6);
     }
+
+    /* ── 目录（TOC）面板 ── */
+    .toc-panel {
+      width: 0;
+      overflow: hidden;
+      transition: width 0.25s ease;
+      background: #1e1e1e;
+      border-right: 1px solid #444;
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .toc-panel.open { width: 240px; }
+    .toc-panel .side-panel-header {
+      border-bottom: 1px solid #333;
+      border-right: none;
+    }
+    .toc-nav {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0;
+    }
+    .toc-item {
+      display: block;
+      padding: 5px 16px;
+      font-size: 12px;
+      color: #ccc;
+      cursor: pointer;
+      text-decoration: none;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      border-left: 2px solid transparent;
+      transition: all 0.15s;
+      line-height: 1.5;
+    }
+    .toc-item:hover { background: #2a2a2a; color: #fff; }
+    .toc-item.active { border-left-color: #07c160; color: #07c160; background: #1a2a1a; }
+    .toc-item[data-level="1"] { padding-left: 16px; font-weight: 600; }
+    .toc-item[data-level="2"] { padding-left: 28px; }
+    .toc-item[data-level="3"] { padding-left: 40px; font-size: 11px; color: #aaa; }
+    .toc-item[data-level="4"],
+    .toc-item[data-level="5"],
+    .toc-item[data-level="6"] { padding-left: 52px; font-size: 11px; color: #999; }
+    .toc-empty {
+      padding: 12px 16px;
+      font-size: 12px;
+      color: #666;
+    }
+    .btn-toc { background: #444; color: #eee; }
+    .btn-toc:hover { background: #555; }
   </style>
 </head>
 <body>
 
   <!-- 工具栏 -->
   <div class="toolbar">
-    <span class="toolbar-title" id="doc-title">MD2WeChat 预览</span>
+    <span class="toolbar-title" id="doc-title">Markdown2Anything 预览</span>
     <select id="theme-select" title="切换主题" style="
       padding:5px 8px; border:none; border-radius:4px; cursor:pointer;
       font-size:13px; background:#3a3a3a; color:#eee; outline:none;
     ">
       <option value="">主题...</option>
     </select>
+    <button class="btn btn-toc" id="btn-toc" title="显示/隐藏文章目录（仅预览用，不影响导出）">
+      📑 目录
+    </button>
     <div class="zoom-controls">
       <button class="btn btn-secondary" id="btn-zoom-out" title="缩小预览">－</button>
       <span id="zoom-value">100%</span>
@@ -1127,6 +1181,14 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
   <!-- 主内容区 -->
   <div class="main">
+    <!-- 目录面板（仅预览用，不影响导出） -->
+    <div class="toc-panel" id="toc-panel">
+      <div class="side-panel-header">📑 目录<button class="panel-close-btn" data-close-panel="toc-panel" data-close-state="tocPanelOpen">×</button></div>
+      <nav class="toc-nav" id="toc-nav">
+        <p class="toc-empty">暂无标题</p>
+      </nav>
+    </div>
+
     <!-- 预览区 -->
     <div class="preview-scroll">
       <div class="article-wrapper" id="preview-content">
@@ -1246,7 +1308,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     let currentThemeBg = '#ffffff';
     let currentZoom = 100;
     // 用对象统一管理面板开关状态，避免 let 变量与 window 属性不同步的 bug
-    const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false };
+    const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false };
 
     const XHS_DEFAULTS = { width: 1080, height: 1440, padding: 40, tolerance: 15 };
 
@@ -1544,6 +1606,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         'btn ' + (panelState.uploadPanelOpen ? 'btn-active' : 'btn-upload');
       document.getElementById('btn-xhs').className =
         'btn ' + (panelState.xhsPanelOpen ? 'btn-active' : 'btn-xhs');
+      document.getElementById('btn-toc').className =
+        'btn ' + (panelState.tocPanelOpen ? 'btn-active' : 'btn-toc');
     }
 
     // 面板关闭按钮（事件委托）
@@ -1556,6 +1620,66 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     });
 
     // ─── 按钮事件 ───
+
+    // ─── TOC 目录 ───
+
+    function buildToc() {
+      const nav = document.getElementById('toc-nav');
+      if (!nav) return;
+      const content = document.getElementById('preview-content');
+      if (!content) return;
+      const headings = content.querySelectorAll('h1, h2, h3, h4, h5, h6');
+      if (!headings.length) {
+        nav.innerHTML = '<p class="toc-empty">暂无标题</p>';
+        return;
+      }
+      // 给没有 id 的标题赋予 id，供锚点跳转
+      headings.forEach((h, i) => {
+        if (!h.id) h.id = 'toc-heading-' + i;
+      });
+      nav.innerHTML = Array.from(headings).map(h => {
+        const level = parseInt(h.tagName[1]);
+        const text = h.innerText || h.textContent || '';
+        return \`<a class="toc-item" data-level="\${level}" data-id="\${h.id}" title="\${text}">\${text}</a>\`;
+      }).join('');
+
+      // 点击跳转
+      nav.querySelectorAll('.toc-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const targetId = item.dataset.id;
+          const target = document.getElementById(targetId);
+          if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            // 高亮当前项
+            nav.querySelectorAll('.toc-item').forEach(i => i.classList.remove('active'));
+            item.classList.add('active');
+          }
+        });
+      });
+    }
+
+    // 滚动时更新 TOC 高亮
+    document.querySelector('.preview-scroll').addEventListener('scroll', () => {
+      if (!panelState.tocPanelOpen) return;
+      const nav = document.getElementById('toc-nav');
+      if (!nav) return;
+      const items = nav.querySelectorAll('.toc-item');
+      if (!items.length) return;
+      const scrollTop = document.querySelector('.preview-scroll').scrollTop;
+      let activeItem = null;
+      items.forEach(item => {
+        const target = document.getElementById(item.dataset.id);
+        if (target && target.offsetTop - 80 <= scrollTop) activeItem = item;
+      });
+      items.forEach(i => i.classList.remove('active'));
+      if (activeItem) activeItem.classList.add('active');
+    });
+
+    // 目录按钮
+    document.getElementById('btn-toc').addEventListener('click', () => {
+      togglePanel('toc-panel', 'tocPanelOpen', []);
+      if (panelState.tocPanelOpen) buildToc();
+    });
 
     // 主题切换
     document.getElementById('theme-select').addEventListener('change', (e) => {
@@ -1705,7 +1829,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           document.getElementById('preview-content').innerHTML = currentBodyHtml;
           document.getElementById('doc-title').textContent = currentTitle
             ? \`预览: \${currentTitle}\`
-            : 'MD2WeChat 预览';
+            : 'Markdown2Anything 预览';
           // 应用主题
           if (msg.theme) {
             applyTheme(msg.theme);
@@ -1713,6 +1837,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           // 填充标题输入框（如果为空）
           const titleInput = document.getElementById('input-title');
           if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
+          // 内容更新后同步重建目录
+          if (panelState.tocPanelOpen) buildToc();
           break;
         }
         case 'themeList': {
