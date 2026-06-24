@@ -116,7 +116,8 @@ async function main() {
     // Chromium canvas 高度上限约 16384px，fullPage: true 会在超高页面上静默截断。
     // 改用分段滚动截图后拼接，突破该限制。
     const TILE_H = 4096; // 每段视口高度（px）
-    const page = await browser.newPage({ viewport: { width: imgW, height: TILE_H } });
+    const SCALE  = 2;    // deviceScaleFactor：输出图片为逻辑尺寸的 2 倍，提升分辨率
+    const page = await browser.newPage({ viewport: { width: imgW, height: TILE_H }, deviceScaleFactor: SCALE });
     const fileUrl = 'file://' + path.resolve(htmlFile);
     await page.goto(fileUrl, { waitUntil: 'networkidle', timeout: 30000 });
     await page.waitForTimeout(800);
@@ -140,7 +141,8 @@ async function main() {
       const rowStart = targetY - actualY;           // 本段截图中，targetY 对应的行号
       const rowEnd   = Math.min(TILE_H, totalPageH - actualY); // 本段截图中，页面末尾对应的行号
       const validH   = rowEnd - rowStart;
-      tiles.push({ png: tile, rowStart, validH });
+      // rowStart/validH 是 CSS 逻辑像素，乘以 SCALE 得到物理像素行号
+      tiles.push({ png: tile, rowStart: rowStart * SCALE, validH: validH * SCALE });
       console.log(`INFO:已截 targetY=${targetY} actualY=${actualY} rowStart=${rowStart} validH=${validH}`);
       targetY += TILE_H;
     }
@@ -162,7 +164,10 @@ async function main() {
     const data = combined.data;
 
     // ── 3. 添加上下 padding（与 Python 版 Image.new + paste 一致）──────────
-    const padH = H + 2 * padding;
+    // padding/imgH 是 CLI 逻辑像素，乘以 SCALE 换算为物理像素
+    const physPadding = padding * SCALE;
+    const physImgH    = imgH * SCALE;
+    const padH = H + 2 * physPadding;
     const padded = new PNG({ width: W, height: padH });
     // 填充背景色
     const bgRgb = parseColor(bg);
@@ -175,10 +180,10 @@ async function main() {
         padded.data[i + 3] = 255;
       }
     }
-    // 把原图贴到 (0, padding) 位置
+    // 把原图贴到 (0, physPadding) 位置
     for (let y = 0; y < H; y++) {
       const srcOff = y * W * 4;
-      const dstOff = (y + padding) * W * 4;
+      const dstOff = (y + physPadding) * W * 4;
       data.copy(padded.data, dstOff, srcOff, srcOff + W * 4);
     }
 
@@ -202,10 +207,10 @@ async function main() {
     const slices = [];  // [[startY, endY], ...]
     let startY = 0;
     while (startY < totalH) {
-      let endY = Math.min(startY + imgH, totalH);
+      let endY = Math.min(startY + physImgH, totalH);
       if (endY < totalH) {
         // 从切割点往上找最近的空白行（搜索范围：下半段的 50%）
-        const minCut = startY + Math.floor(imgH / 2);
+        const minCut = startY + Math.floor(physImgH / 2);
         let cutY = endY;
         while (cutY > minCut) {
           if (isBlankRow(cutY - 1, 10)) {

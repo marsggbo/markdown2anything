@@ -2,7 +2,7 @@
   "name": "markdown2anything",
   "displayName": "Markdown2Anything - Markdown 导出微信/知乎/小红书（原 md2wechat 升级版）",
   "description": "将 Markdown 一键导出到微信公众号/知乎/小红书，支持 LaTeX 公式、目录预览、10 套主题、实时预览、小红书截图导出（原 md2wechat 插件升级版）",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",
