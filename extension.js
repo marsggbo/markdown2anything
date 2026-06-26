@@ -7,6 +7,7 @@ const https = require('https');
 
 const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtml } = require('./lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('./lib/themes');
+const zhihu = require('./lib/zhihu');
 
 // ─────────────────────────────────────────────
 //  全局状态
@@ -524,6 +525,178 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
+    case 'zhihuCheckLogin': {
+      const cookieStr = extContext.globalState.get(zhihu.STORAGE_KEY, '');
+      if (zhihu.isLoggedIn(cookieStr)) {
+        const info = await zhihu.verifyLogin(cookieStr);
+        panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: info.valid, name: info.name });
+      } else {
+        panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: false });
+      }
+      break;
+    }
+
+    case 'zhihuStartQr': {
+      // 用 Playwright 打开真实浏览器让用户登录，绕过知乎的反爬限制
+      const { spawn } = require('child_process');
+      const scriptPath = path.join(extContext.extensionUri.fsPath, 'scripts', 'zhihu_login.js');
+      panel.webview.postMessage({ type: 'zhihuQrProgress', message: '正在启动浏览器，请在弹出的窗口中登录...' });
+      log('启动知乎登录浏览器');
+
+      const proc = spawn(process.execPath, [scriptPath]);
+      let stdout = '';
+
+      proc.stdout.on('data', async (d) => {
+        stdout += d.toString();
+        const lines = stdout.split('\n');
+        for (const line of lines) {
+          if (line === 'READY') {
+            panel.webview.postMessage({ type: 'zhihuQrReady' });
+          } else if (line.startsWith('COOKIE:')) {
+            try {
+              const cookies = JSON.parse(line.slice(7));
+              // 把 playwright cookie 数组转为 "name=value; ..." 字符串
+              const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+              const info = await zhihu.verifyLogin(cookieStr);
+              if (info.valid) {
+                await extContext.globalState.update(zhihu.STORAGE_KEY, cookieStr);
+                panel.webview.postMessage({ type: 'zhihuPollResult', status: 'confirmed', name: info.name });
+                log(`知乎登录成功: ${info.name}`);
+              } else {
+                panel.webview.postMessage({ type: 'zhihuQrError', message: '登录成功但 Cookie 验证失败，请重试' });
+              }
+            } catch (e) {
+              panel.webview.postMessage({ type: 'zhihuQrError', message: '解析登录结果失败：' + e.message });
+            }
+          } else if (line === 'NEED_INSTALL') {
+            panel.webview.postMessage({ type: 'zhihuQrError', message: '未找到 Chromium，请先使用小红书截图功能触发自动安装' });
+          } else if (line.startsWith('ERROR:')) {
+            panel.webview.postMessage({ type: 'zhihuQrError', message: line.slice(6) });
+          }
+        }
+      });
+
+      proc.on('error', (err) => {
+        panel.webview.postMessage({ type: 'zhihuQrError', message: '启动失败：' + err.message });
+      });
+
+      break;
+    }
+
+    case 'zhihuPollQr':
+      // 已不再使用，Playwright 方案由子进程自行轮询
+      break;
+
+    case 'zhihuLogout': {
+      await extContext.globalState.update(zhihu.STORAGE_KEY, undefined);
+      extContext.globalState.update('zhihu._qrToken', undefined);
+      extContext.globalState.update('zhihu._qrCookie', undefined);
+      panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: false });
+      break;
+    }
+
+    case 'zhihuSaveCookie': {
+      try {
+        // 用户粘贴的是 z_c0 的值，包装成完整 cookie 字符串
+        const raw = (msg.z_c0 || '').trim();
+        if (!raw) {
+          panel.webview.postMessage({ type: 'zhihuSaveCookieResult', success: false, error: 'z_c0 值不能为空' });
+          break;
+        }
+        // 支持两种格式：纯值，或已带 "z_c0=..." 前缀
+        const cookieStr = raw.startsWith('z_c0=') ? raw : `z_c0=${raw}`;
+        const info = await zhihu.verifyLogin(cookieStr);
+        if (!info.valid) {
+          panel.webview.postMessage({ type: 'zhihuSaveCookieResult', success: false, error: 'Cookie 无效或已过期，请重新获取' });
+          break;
+        }
+        await extContext.globalState.update(zhihu.STORAGE_KEY, cookieStr);
+        panel.webview.postMessage({ type: 'zhihuSaveCookieResult', success: true, name: info.name });
+        panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: true, name: info.name });
+      } catch (err) {
+        log(`知乎 Cookie 验证失败: ${err.message}`);
+        panel.webview.postMessage({ type: 'zhihuSaveCookieResult', success: false, error: err.message });
+      }
+      break;
+    }
+
+    case 'zhihuGetArticleId': {
+      const mapKey = 'zhihu.articleIdMap';
+      const map = extContext.globalState.get(mapKey, {});
+      const savedId = map[mdPath] || null;
+      panel.webview.postMessage({ type: 'zhihuArticleId', articleId: savedId });
+      break;
+    }
+
+    case 'zhihuPublish': {
+      try {
+        const cookieStr = extContext.globalState.get(zhihu.STORAGE_KEY, '');
+        if (!zhihu.isLoggedIn(cookieStr)) {
+          panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: '未登录，请先扫码登录' });
+          break;
+        }
+        const { title, articleId: existingId } = msg;
+        if (!title || !title.trim()) {
+          panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: '文章标题不能为空' });
+          break;
+        }
+
+        panel.webview.postMessage({ type: 'zhihuPublishStart' });
+        log(`开始发布到知乎: ${title}${existingId ? ` (更新 ${existingId})` : ''}`);
+
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(mdPath));
+        const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
+        const cfg = vscode.workspace.getConfiguration('md2wechat');
+        const templateName = cfg.get('template', 'wechat');
+        const templatePath = getTemplatePath(workspacePath, templateName);
+        const { bodyHtml } = renderMarkdown(mdPath);
+        const theme = getTheme(currentThemeId);
+        let htmlContent = buildZhihuCopyHtml(bodyHtml, templatePath, theme);
+
+        // 处理代码块（去掉 hljs span，保留纯文本 + 内联样式）
+        htmlContent = zhihu.normalizeCodeBlocks(htmlContent);
+        // 规范化图片标签（去掉 figure 包裹和内联样式，知乎不支持这些）
+        htmlContent = zhihu.normalizeImagesForZhihu(htmlContent);
+
+        // 上传本地图片到知乎图床
+        panel.webview.postMessage({ type: 'zhihuPublishProgress', message: '正在上传图片...' });
+        const uploadResult = await zhihu.uploadImagesInHtml(htmlContent, cookieStr, (done, total, failed) => {
+          log(`图片上传进度: ${done}/${total}${failed ? `，失败 ${failed} 张` : ''}`);
+          panel.webview.postMessage({ type: 'zhihuPublishProgress', message: `正在上传图片 ${done}/${total}...` });
+        });
+        htmlContent = uploadResult.html;
+        if (uploadResult.failed > 0) {
+          log(`图片上传部分失败: ${uploadResult.failed}/${uploadResult.total}，错误：${uploadResult.errors.join('; ')}`);
+          panel.webview.postMessage({ type: 'zhihuPublishProgress', message: `⚠️ ${uploadResult.failed} 张图片上传失败，继续发布...` });
+        }
+
+        panel.webview.postMessage({ type: 'zhihuPublishProgress', message: existingId ? '正在更新文章...' : '正在发布文章...' });
+
+        let result;
+        if (existingId) {
+          result = await zhihu.updateAndPublishArticle({ articleId: existingId, title: title.trim(), htmlContent, cookieStr });
+        } else {
+          result = await zhihu.createAndPublishArticle({ title: title.trim(), htmlContent, cookieStr });
+        }
+
+        // 保存文件路径 → 文章 ID 映射
+        const mapKey = 'zhihu.articleIdMap';
+        const map = extContext.globalState.get(mapKey, {});
+        map[mdPath] = result.articleId;
+        await extContext.globalState.update(mapKey, map);
+
+        log(`知乎发布成功: ${result.url}`);
+        panel.webview.postMessage({ type: 'zhihuPublishResult', success: true, articleId: result.articleId, url: result.url });
+        vscode.window.showInformationMessage(`✅ 知乎${existingId ? '更新' : '发布'}成功！`, '打开文章').then(a => {
+          if (a === '打开文章') vscode.env.openExternal(vscode.Uri.parse(result.url));
+        });
+      } catch (err) {
+        log(`知乎发布失败: ${err.message}`);
+        panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: err.message });
+      }
+      break;
+    }
+
     default:
       break;
   }
@@ -751,6 +924,15 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     .btn-upload:hover    { background: #d4551f; }
     .btn-zhihu     { background: #0066ff; color: #fff; }
     .btn-zhihu:hover     { background: #0052cc; }
+    .btn-zhihu-publish  { background: #1772f6; color: #fff; }
+    .btn-zhihu-publish:hover { background: #0e5cd1; }
+    .zhihu-tab {
+      flex: 1; padding: 7px 0; background: none; border: none;
+      border-bottom: 2px solid transparent; color: #888; font-size: 13px;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .zhihu-tab:hover { color: #ccc; }
+    .zhihu-tab-active { color: #4fc3f7; border-bottom-color: #4fc3f7; }
     .btn-xhs       { background: #ff2442; color: #fff; }
     .btn-xhs:hover       { background: #d91c38; }
     .btn-xhs-copy  { background: #ff6080; color: #fff; }
@@ -1162,6 +1344,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     <button class="btn btn-zhihu" id="btn-zhihu" title="复制适合粘贴到知乎编辑器的内容（公式保留 KaTeX HTML）">
       📝 复制知乎
     </button>
+    <button class="btn btn-zhihu-publish" id="btn-zhihu-publish" title="直接发布到知乎专栏（需扫码登录）">
+      🚀 发布知乎
+    </button>
     <button class="btn btn-xhs" id="btn-xhs" title="将文章渲染为多张图片导出，适合发布小红书">
       📸 导出小红书
     </button>
@@ -1256,6 +1441,69 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       </div>
     </div>
 
+    <!-- 知乎发布面板 -->
+    <div class="side-panel" id="zhihu-publish-panel">
+      <div class="side-panel-header">🚀 发布到知乎<button class="panel-close-btn" data-close-panel="zhihu-publish-panel" data-close-state="zhihuPublishPanelOpen">×</button></div>
+      <div class="side-panel-body">
+
+        <!-- 已登录视图 -->
+        <div id="zhihu-logged-in" style="display:none;">
+          <p class="hint" style="color:#4caf50;">✅ 已登录：<strong id="zhihu-user-name"></strong></p>
+          <div class="panel-actions">
+            <button class="btn btn-secondary" id="btn-zhihu-logout">退出登录</button>
+          </div>
+          <div class="divider"></div>
+          <label>文章标题 <span style="color:#f06529">*</span></label>
+          <input type="text" id="zhihu-input-title" placeholder="文章标题">
+          <label>已有文章 ID（留空 = 新建，填写 = 更新）</label>
+          <input type="text" id="zhihu-input-article-id" placeholder="留空新建，填写则更新已有文章">
+          <p class="hint" style="margin-top:4px;">文章 ID 是知乎链接 <code style="color:#4fc3f7;">/p/</code> 后的数字，发布成功后自动填入。</p>
+          <div class="hint" style="margin-top:10px;color:#e6a817;border:1px solid #555;padding:8px;border-radius:4px;">
+            ⚠️ 发布后文章将直接公开到你的知乎专栏，请确认内容无误后再发布。
+          </div>
+          <div class="panel-actions" style="margin-top:14px;">
+            <button class="btn btn-zhihu-publish" id="btn-zhihu-do-publish">发布文章</button>
+          </div>
+          <p class="hint" id="zhihu-publish-progress" style="margin-top:8px;display:none;"></p>
+          <div class="upload-result" id="zhihu-publish-result"></div>
+        </div>
+
+        <!-- 未登录视图：标签页切换 -->
+        <div id="zhihu-logged-out">
+          <!-- 标签页 -->
+          <div style="display:flex;gap:0;margin-bottom:14px;border-bottom:1px solid #444;">
+            <button id="zhihu-tab-qr"     class="zhihu-tab zhihu-tab-active">📱 扫码登录</button>
+            <button id="zhihu-tab-cookie" class="zhihu-tab">🍪 手动 Cookie</button>
+          </div>
+
+          <!-- 浏览器登录 -->
+          <div id="zhihu-pane-qr">
+            <p class="hint">点击下方按钮，将弹出真实浏览器窗口。<br>在浏览器中用手机扫码（或账号密码）登录知乎，登录后插件将自动获取凭证。<br><br>登录凭证仅保存在本地 VS Code 存储中，不写入文件，不会被 git 追踪。</p>
+            <div class="panel-actions">
+              <button class="btn btn-zhihu-publish" id="btn-zhihu-qr">打开浏览器登录</button>
+            </div>
+            <p class="hint" id="zhihu-qr-hint" style="margin-top:10px;display:none;"></p>
+          </div>
+
+          <!-- 手动 Cookie -->
+          <div id="zhihu-pane-cookie" style="display:none;">
+            <p class="hint">
+              在浏览器打开 <strong style="color:#ccc;">zhihu.com</strong>，登录后按 F12 → Application → Cookies，
+              复制 <code style="color:#4fc3f7;">z_c0</code> 的值粘贴到下方。<br>
+              Cookie 仅保存在本地 VS Code 存储中，不写入文件，不会被 git 追踪。
+            </p>
+            <label>z_c0 Cookie 值 <span style="color:#f06529">*</span></label>
+            <textarea id="zhihu-input-cookie" placeholder="粘贴 z_c0 的值..." style="min-height:80px;font-size:11px;word-break:break-all;"></textarea>
+            <div class="panel-actions" style="margin-top:10px;">
+              <button class="btn btn-zhihu-publish" id="btn-zhihu-save-cookie">验证并保存</button>
+            </div>
+            <div class="upload-result" id="zhihu-cookie-result"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
     <!-- 小红书面板 -->
     <div class="side-panel xhs-panel" id="xhs-panel">
       <div class="resize-handle" id="xhs-resize-handle"></div>
@@ -1308,7 +1556,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     let currentThemeBg = '#ffffff';
     let currentZoom = 100;
     // 用对象统一管理面板开关状态，避免 let 变量与 window 属性不同步的 bug
-    const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false };
+    const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false };
 
     const XHS_DEFAULTS = { width: 1080, height: 1440, padding: 40, tolerance: 15 };
 
@@ -1608,6 +1856,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         'btn ' + (panelState.xhsPanelOpen ? 'btn-active' : 'btn-xhs');
       document.getElementById('btn-toc').className =
         'btn ' + (panelState.tocPanelOpen ? 'btn-active' : 'btn-toc');
+      document.getElementById('btn-zhihu-publish').className =
+        'btn ' + (panelState.zhihuPublishPanelOpen ? 'btn-active' : 'btn-zhihu-publish');
     }
 
     // 面板关闭按钮（事件委托）
@@ -1696,12 +1946,12 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     document.getElementById('btn-style').addEventListener('click', () => {
       togglePanel('style-panel', 'stylePanelOpen',
-        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'}]);
+        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'}]);
     });
 
     document.getElementById('btn-upload').addEventListener('click', () => {
       togglePanel('upload-panel', 'uploadPanelOpen',
-        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'}]);
+        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'}]);
       if (panelState.uploadPanelOpen) {
         const titleInput = document.getElementById('input-title');
         if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
@@ -1709,9 +1959,70 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       }
     });
 
+    document.getElementById('btn-zhihu-publish').addEventListener('click', () => {
+      togglePanel('zhihu-publish-panel', 'zhihuPublishPanelOpen',
+        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'}]);
+      if (panelState.zhihuPublishPanelOpen) {
+        const titleInput = document.getElementById('zhihu-input-title');
+        if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
+        vscode.postMessage({ type: 'zhihuCheckLogin' });
+        vscode.postMessage({ type: 'zhihuGetArticleId' });
+      }
+    });
+
+    // 知乎面板内部事件
+
+    // 标签页切换
+    function switchZhihuTab(tab) {
+      const isQr = tab === 'qr';
+      document.getElementById('zhihu-pane-qr').style.display     = isQr ? '' : 'none';
+      document.getElementById('zhihu-pane-cookie').style.display  = isQr ? 'none' : '';
+      document.getElementById('zhihu-tab-qr').className     = 'zhihu-tab' + (isQr ? ' zhihu-tab-active' : '');
+      document.getElementById('zhihu-tab-cookie').className  = 'zhihu-tab' + (!isQr ? ' zhihu-tab-active' : '');
+      if (!isQr) stopZhihuQrPoll();
+    }
+    document.getElementById('zhihu-tab-qr').addEventListener('click',     () => switchZhihuTab('qr'));
+    document.getElementById('zhihu-tab-cookie').addEventListener('click',  () => switchZhihuTab('cookie'));
+
+    document.getElementById('btn-zhihu-qr').addEventListener('click', () => {
+      vscode.postMessage({ type: 'zhihuStartQr' });
+    });
+
+    document.getElementById('btn-zhihu-save-cookie').addEventListener('click', () => {
+      const raw = document.getElementById('zhihu-input-cookie').value.trim();
+      if (!raw) { showToast('请输入 z_c0 值', 'error'); return; }
+      const btn = document.getElementById('btn-zhihu-save-cookie');
+      btn.disabled = true; btn.textContent = '⏳ 验证中...';
+      vscode.postMessage({ type: 'zhihuSaveCookie', z_c0: raw });
+    });
+
+    document.getElementById('btn-zhihu-logout').addEventListener('click', () => {
+      if (!confirm('确认退出知乎登录？')) return;
+      vscode.postMessage({ type: 'zhihuLogout' });
+    });
+
+    document.getElementById('btn-zhihu-do-publish').addEventListener('click', () => {
+      const title     = document.getElementById('zhihu-input-title').value.trim();
+      const articleId = document.getElementById('zhihu-input-article-id').value.trim();
+      if (!title) { showToast('请填写文章标题', 'error'); return; }
+      vscode.postMessage({ type: 'zhihuPublish', title, articleId: articleId || null });
+    });
+
+    // 扫码轮询定时器
+    let _zhihuQrTimer = null;
+    function startZhihuQrPoll() {
+      stopZhihuQrPoll();
+      _zhihuQrTimer = setInterval(() => {
+        vscode.postMessage({ type: 'zhihuPollQr' });
+      }, 2000);
+    }
+    function stopZhihuQrPoll() {
+      if (_zhihuQrTimer) { clearInterval(_zhihuQrTimer); _zhihuQrTimer = null; }
+    }
+
     document.getElementById('btn-xhs').addEventListener('click', () => {
       togglePanel('xhs-panel', 'xhsPanelOpen',
-        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'}]);
+        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'}]);
     });
 
     document.getElementById('btn-xhs-python').addEventListener('click', () => {
@@ -2031,6 +2342,123 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           showToast('✅ 配置已保存', 'success');
           break;
         }
+
+        // ── 知乎发布 ──
+        case 'zhihuLoginStatus': {
+          const loggedOut = document.getElementById('zhihu-logged-out');
+          const loggedIn  = document.getElementById('zhihu-logged-in');
+          if (msg.loggedIn) {
+            loggedOut.style.display = 'none';
+            loggedIn.style.display  = 'block';
+            document.getElementById('zhihu-user-name').textContent = msg.name || '（已登录）';
+            stopZhihuQrPoll();
+          } else {
+            loggedOut.style.display = 'block';
+            loggedIn.style.display  = 'none';
+            document.getElementById('zhihu-input-cookie').value = '';
+            document.getElementById('zhihu-cookie-result').style.display = 'none';
+            switchZhihuTab('qr');
+          }
+          break;
+        }
+        case 'zhihuSaveCookieResult': {
+          const btn = document.getElementById('btn-zhihu-save-cookie');
+          btn.disabled = false; btn.textContent = '验证并保存';
+          const res = document.getElementById('zhihu-cookie-result');
+          if (msg.success) {
+            res.className = 'upload-result success';
+            res.textContent = \`✅ 验证成功，已登录为：\${msg.name || '（未知用户）'}\`;
+            showToast('知乎 Cookie 已保存！', 'success');
+          } else {
+            res.className = 'upload-result error';
+            res.textContent = \`❌ \${msg.error || '验证失败'}\`;
+            showToast(msg.error || '验证失败', 'error');
+          }
+          res.style.display = 'block';
+          break;
+        }
+        case 'zhihuQrProgress': {
+          const btn = document.getElementById('btn-zhihu-qr');
+          btn.disabled = true; btn.textContent = '⏳ 启动中...';
+          const hint = document.getElementById('zhihu-qr-hint');
+          hint.textContent = msg.message || '正在启动浏览器...';
+          hint.style.display = '';
+          break;
+        }
+        case 'zhihuQrReady': {
+          const hint = document.getElementById('zhihu-qr-hint');
+          hint.textContent = '浏览器已打开，请在浏览器窗口中完成登录...';
+          hint.style.display = '';
+          document.getElementById('btn-zhihu-qr').disabled = true;
+          document.getElementById('btn-zhihu-qr').textContent = '⏳ 等待登录...';
+          break;
+        }
+        case 'zhihuQrError': {
+          const btn = document.getElementById('btn-zhihu-qr');
+          btn.disabled = false; btn.textContent = '重新打开浏览器';
+          const hint = document.getElementById('zhihu-qr-hint');
+          hint.textContent = '❌ ' + (msg.message || '未知错误');
+          hint.style.display = '';
+          break;
+        }
+        case 'zhihuPollResult': {
+          if (msg.status === 'confirmed') {
+            document.getElementById('btn-zhihu-qr').disabled = false;
+            document.getElementById('btn-zhihu-qr').textContent = '重新登录';
+            document.getElementById('zhihu-logged-out').style.display = 'none';
+            document.getElementById('zhihu-logged-in').style.display  = 'block';
+            document.getElementById('zhihu-user-name').textContent    = msg.name || '（已登录）';
+            showToast('✅ 知乎登录成功！', 'success');
+          } else if (msg.status === 'error') {
+            const btn = document.getElementById('btn-zhihu-qr');
+            btn.disabled = false; btn.textContent = '重新打开浏览器';
+            showToast('登录出错：' + (msg.message || '未知错误'), 'error');
+          }
+          break;
+        }
+        case 'zhihuPublishStart': {
+          const btn = document.getElementById('btn-zhihu-do-publish');
+          btn.disabled = true; btn.textContent = '⏳ 发布中...';
+          document.getElementById('zhihu-publish-result').style.display = 'none';
+          const prog = document.getElementById('zhihu-publish-progress');
+          prog.textContent = '准备发布...';
+          prog.style.display = '';
+          break;
+        }
+        case 'zhihuPublishProgress': {
+          const prog = document.getElementById('zhihu-publish-progress');
+          prog.textContent = msg.message || '';
+          prog.style.display = '';
+          break;
+        }
+        case 'zhihuArticleId': {
+          if (msg.articleId) {
+            document.getElementById('zhihu-input-article-id').value = msg.articleId;
+          }
+          break;
+        }
+        case 'zhihuPublishResult': {
+          const btn = document.getElementById('btn-zhihu-do-publish');
+          btn.disabled = false; btn.textContent = '发布文章';
+          document.getElementById('zhihu-publish-progress').style.display = 'none';
+          const res = document.getElementById('zhihu-publish-result');
+          if (msg.success) {
+            res.className = 'upload-result success';
+            res.innerHTML = \`✅ 发布成功！<br><a href="\${msg.url}" style="color:#4fc3f7;word-break:break-all;" title="\${msg.url}">\${msg.url}</a>\`;
+            showToast('知乎发布成功！', 'success');
+            // 保存文章 ID，供下次更新用
+            if (msg.articleId) {
+              document.getElementById('zhihu-input-article-id').value = msg.articleId;
+            }
+          } else {
+            res.className = 'upload-result error';
+            res.textContent = \`❌ 发布失败：\${msg.error || '未知错误'}\`;
+            showToast('发布失败', 'error');
+          }
+          res.style.display = 'block';
+          break;
+        }
+
         case 'uploadStart': {
           const btn = document.getElementById('btn-do-upload');
           btn.textContent = '上传中...';
