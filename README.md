@@ -220,14 +220,14 @@ npm run build:mac:universal
 2. 进入「设置与开发」→「基本配置」
 3. 在「开发者 ID（AppID）」和「开发者密码（AppSecret）」中获取
 
-也可以在 VS Code 设置中直接配置（`Cmd+,` → 搜索 `md2wechat`）：
+也可以在 VS Code 设置中直接配置（`Cmd+,` → 搜索 `markdown2anything`）：
 
 ```json
 {
-  "md2wechat.appid": "wxxxxxxxxxxx",
-  "md2wechat.appSecret": "your-app-secret",
-  "md2wechat.author": "作者名称",
-  "md2wechat.digest": "文章摘要"
+  "markdown2anything.appid": "wxxxxxxxxxxx",
+  "markdown2anything.appSecret": "your-app-secret",
+  "markdown2anything.author": "作者名称",
+  "markdown2anything.digest": "文章摘要"
 }
 ```
 
@@ -274,14 +274,14 @@ your-project/
 ├── templates/
 │   └── custom.html    ← 自定义模板
 ├── article.md
-└── md2wechat.config.json  (可选)
+└── markdown2anything.config.json  (可选)
 ```
 
 在 VS Code 设置中指定模板名称：
 
 ```json
 {
-  "md2wechat.template": "custom"
+  "markdown2anything.template": "custom"
 }
 ```
 

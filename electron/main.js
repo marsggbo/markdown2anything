@@ -201,7 +201,7 @@ ipcMain.on('saveFile', (_event, content) => {
 
 ipcMain.on('editorContentChanged', (_event, content) => {
   const tmpDir = os.tmpdir();
-  const tmpFile = path.join(tmpDir, `md2wechat_edit_${crypto.randomUUID()}.md`);
+  const tmpFile = path.join(tmpDir, `markdown2anything_edit_${crypto.randomUUID()}.md`);
   try {
     fs.writeFileSync(tmpFile, content, 'utf8');
     renderAndSendPreview(tmpFile);
@@ -453,11 +453,11 @@ ipcMain.on('generateXhsViaPython', async (_event, msg) => {
   const theme = getTheme(currentThemeId);
   const htmlContent = buildXhsRenderHtml(bodyHtml, path.dirname(currentFilePath), theme);
 
-  const tmpHtml = path.join(os.tmpdir(), `md2wechat_xhs_${crypto.randomUUID()}.html`);
+  const tmpHtml = path.join(os.tmpdir(), `markdown2anything_xhs_${crypto.randomUUID()}.html`);
   const base = path.basename(currentFilePath, path.extname(currentFilePath));
   const outDir = autoExport
     ? path.join(path.dirname(currentFilePath), `${base}_xhs`)
-    : path.join(os.tmpdir(), `md2wechat_xhs_preview_${crypto.randomUUID()}`);
+    : path.join(os.tmpdir(), `markdown2anything_xhs_preview_${crypto.randomUUID()}`);
 
   fs.writeFileSync(tmpHtml, htmlContent, 'utf8');
 
@@ -607,7 +607,7 @@ function postToFastPen({ markdown, title, appid, appSecret, author, digest }) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(bodyData, 'utf8'),
-        'User-Agent': 'md2wechat-electron/1.0',
+        'User-Agent': 'markdown2anything-electron/1.0',
       },
     };
 

@@ -1,7 +1,7 @@
 {
   "name": "markdown2anything",
-  "displayName": "Markdown2Anything - Markdown 导出微信/知乎/小红书（原 md2wechat 升级版）",
-  "description": "将 Markdown 一键导出到微信公众号/知乎/小红书，支持 LaTeX 公式、目录预览、10 套主题、实时预览、小红书截图导出（原 md2wechat 插件升级版）",
+  "displayName": "Markdown2Anything - Markdown 导出微信/知乎/小红书",
+  "description": "将 Markdown 一键导出到微信公众号/知乎/小红书，支持 LaTeX 公式、目录预览、10 套主题、实时预览、小红书截图导出",
   "version": "2.0.4",
   "publisher": "marsggbo",
   "license": "MIT",
@@ -20,7 +20,6 @@
   "keywords": [
     "markdown",
     "wechat",
-    "md2wechat",
     "markdown2anything",
     "微信公众号",
     "小红书",
@@ -40,50 +39,50 @@
   "main": "./extension.js",
   "activationEvents": [
     "onLanguage:markdown",
-    "onCommand:md2wechat.preview",
-    "onCommand:md2wechat.convert"
+    "onCommand:markdown2anything.preview",
+    "onCommand:markdown2anything.convert"
   ],
   "contributes": {
     "commands": [
       {
-        "command": "md2wechat.preview",
+        "command": "markdown2anything.preview",
         "title": "预览微信公众号效果",
-        "category": "md2wechat",
+        "category": "markdown2anything",
         "icon": {
           "light": "./images/preview-icon.svg",
           "dark": "./images/preview-icon.svg"
         }
       },
       {
-        "command": "md2wechat.convert",
+        "command": "markdown2anything.convert",
         "title": "导出微信公众号 HTML 文件",
-        "category": "md2wechat",
+        "category": "markdown2anything",
         "icon": "$(export)"
       }
     ],
     "menus": {
       "editor/title": [
         {
-          "command": "md2wechat.preview",
+          "command": "markdown2anything.preview",
           "when": "resourceLangId == markdown",
           "group": "navigation"
         }
       ],
       "explorer/context": [
         {
-          "command": "md2wechat.preview",
+          "command": "markdown2anything.preview",
           "when": "resourceExtname == .md",
           "group": "1_modification"
         },
         {
-          "command": "md2wechat.convert",
+          "command": "markdown2anything.convert",
           "when": "resourceExtname == .md",
           "group": "1_modification"
         }
       ],
       "editor/context": [
         {
-          "command": "md2wechat.preview",
+          "command": "markdown2anything.preview",
           "when": "resourceLangId == markdown",
           "group": "1_modification"
         }
@@ -91,41 +90,41 @@
     },
     "keybindings": [
       {
-        "command": "md2wechat.preview",
+        "command": "markdown2anything.preview",
         "key": "ctrl+shift+w",
         "mac": "cmd+shift+w",
         "when": "resourceLangId == markdown"
       }
     ],
     "configuration": {
-      "title": "MD2WeChat",
+      "title": "Markdown2Anything",
       "properties": {
-        "md2wechat.appid": {
+        "markdown2anything.appid": {
           "type": "string",
           "default": "",
           "description": "微信公众号 AppID（用于上传草稿箱，通过 FastPen 服务）"
         },
-        "md2wechat.appSecret": {
+        "markdown2anything.appSecret": {
           "type": "string",
           "default": "",
           "description": "微信公众号 AppSecret（用于上传草稿箱，通过 FastPen 服务）"
         },
-        "md2wechat.author": {
+        "markdown2anything.author": {
           "type": "string",
           "default": "",
           "description": "默认作者名称"
         },
-        "md2wechat.digest": {
+        "markdown2anything.digest": {
           "type": "string",
           "default": "",
           "description": "默认文章摘要"
         },
-        "md2wechat.template": {
+        "markdown2anything.template": {
           "type": "string",
           "default": "wechat",
           "description": "模板名称（可在工作区 templates/ 目录下放置同名 .html 模板）"
         },
-        "md2wechat.outputPath": {
+        "markdown2anything.outputPath": {
           "type": "string",
           "default": "build",
           "description": "导出 HTML 的目录（相对于工作区根目录）"

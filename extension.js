@@ -38,8 +38,8 @@ function activate(context) {
   log('Markdown2Anything 插件已激活');
 
   context.subscriptions.push(
-    vscode.commands.registerCommand('md2wechat.preview', handlePreview),
-    vscode.commands.registerCommand('md2wechat.convert', handleConvert),
+    vscode.commands.registerCommand('markdown2anything.preview', handlePreview),
+    vscode.commands.registerCommand('markdown2anything.convert', handleConvert),
 
     // 文档变更时更新预览（500ms 防抖）
     vscode.workspace.onDidChangeTextDocument((e) => {
@@ -139,7 +139,7 @@ async function handlePreview(uri) {
 
   // 创建新面板
   const panel = vscode.window.createWebviewPanel(
-    'md2wechatPreview',
+    'markdown2anythingPreview',
     `预览: ${path.basename(mdPath)}`,
     { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
     {
@@ -184,7 +184,7 @@ async function handleConvert(uri) {
   try {
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(mdPath));
     const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
-    const cfg = vscode.workspace.getConfiguration('md2wechat');
+    const cfg = vscode.workspace.getConfiguration('markdown2anything');
     const templateName = cfg.get('template', 'wechat');
     const outputDir = cfg.get('outputPath', 'build');
     const templatePath = getTemplatePath(workspacePath, templateName);
@@ -289,7 +289,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     }
 
     case 'saveConfig': {
-      const cfg = vscode.workspace.getConfiguration('md2wechat');
+      const cfg = vscode.workspace.getConfiguration('markdown2anything');
       await cfg.update('appid', msg.appid, vscode.ConfigurationTarget.Global);
       await cfg.update('appSecret', msg.appSecret, vscode.ConfigurationTarget.Global);
       if (msg.author !== undefined)
@@ -371,12 +371,12 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       const { bodyHtml } = renderMarkdown(mdPath);
       const theme = getTheme(currentThemeId);
       const htmlContent = buildXhsRenderHtml(bodyHtml, path.dirname(mdPath), theme);
-      const tmpHtml = path.join(os.tmpdir(), `md2wechat_xhs_${Date.now()}.html`);
+      const tmpHtml = path.join(os.tmpdir(), `markdown2anything_xhs_${Date.now()}.html`);
       const base = path.basename(mdPath, path.extname(mdPath));
       // 生成预览时保存到系统临时目录，一键导出时才保存到项目目录
       const outDir = autoExport
         ? path.join(path.dirname(mdPath), `${base}_xhs`)
-        : path.join(os.tmpdir(), `md2wechat_xhs_preview_${Date.now()}`);
+        : path.join(os.tmpdir(), `markdown2anything_xhs_preview_${Date.now()}`);
       fs.writeFileSync(tmpHtml, htmlContent, 'utf8');
 
       const scriptPath = path.join(extContext.extensionUri.fsPath, 'scripts', 'xhs_screenshot.js');
@@ -473,7 +473,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       try {
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(mdPath));
         const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
-        const cfg = vscode.workspace.getConfiguration('md2wechat');
+        const cfg = vscode.workspace.getConfiguration('markdown2anything');
         const templateName = cfg.get('template', 'wechat');
         const templatePath = getTemplatePath(workspacePath, templateName);
         const { bodyHtml } = renderMarkdown(mdPath);
@@ -491,7 +491,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       try {
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(mdPath));
         const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
-        const cfg = vscode.workspace.getConfiguration('md2wechat');
+        const cfg = vscode.workspace.getConfiguration('markdown2anything');
         const templateName = cfg.get('template', 'wechat');
         const templatePath = getTemplatePath(workspacePath, templateName);
         const { bodyHtml } = renderMarkdown(mdPath);
@@ -646,7 +646,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
 
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(mdPath));
         const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
-        const cfg = vscode.workspace.getConfiguration('md2wechat');
+        const cfg = vscode.workspace.getConfiguration('markdown2anything');
         const templateName = cfg.get('template', 'wechat');
         const templatePath = getTemplatePath(workspacePath, templateName);
         const { bodyHtml } = renderMarkdown(mdPath);
@@ -715,7 +715,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
 
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(mdPath));
         const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
-        const cfg = vscode.workspace.getConfiguration('md2wechat');
+        const cfg = vscode.workspace.getConfiguration('markdown2anything');
         const templateName = cfg.get('template', 'wechat');
         const templatePath = getTemplatePath(workspacePath, templateName);
         const { bodyHtml } = renderMarkdown(mdPath);
@@ -757,7 +757,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
 }
 
 function sendConfig(panel) {
-  const cfg = vscode.workspace.getConfiguration('md2wechat');
+  const cfg = vscode.workspace.getConfiguration('markdown2anything');
   panel.webview.postMessage({
     type: 'config',
     appid: cfg.get('appid', ''),
@@ -837,7 +837,7 @@ function postToFastPen({ markdown, title, appid, appSecret, author, digest }) {
       headers: {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(bodyData, 'utf8'),
-        'User-Agent': 'md2wechat-vscode/1.0',
+        'User-Agent': 'markdown2anything-vscode/1.0',
       },
     };
 
