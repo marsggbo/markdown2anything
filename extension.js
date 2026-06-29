@@ -697,6 +697,60 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
+    case 'zhihuSaveDraft': {
+      try {
+        const cookieStr = extContext.globalState.get(zhihu.STORAGE_KEY, '');
+        if (!zhihu.isLoggedIn(cookieStr)) {
+          panel.webview.postMessage({ type: 'zhihuDraftResult', success: false, error: '未登录，请先扫码登录' });
+          break;
+        }
+        const { title, articleId: existingId } = msg;
+        if (!title || !title.trim()) {
+          panel.webview.postMessage({ type: 'zhihuDraftResult', success: false, error: '文章标题不能为空' });
+          break;
+        }
+
+        panel.webview.postMessage({ type: 'zhihuPublishStart' });
+        log(`保存知乎草稿: ${title}${existingId ? ` (articleId=${existingId})` : ''}`);
+
+        const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(mdPath));
+        const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
+        const cfg = vscode.workspace.getConfiguration('md2wechat');
+        const templateName = cfg.get('template', 'wechat');
+        const templatePath = getTemplatePath(workspacePath, templateName);
+        const { bodyHtml } = renderMarkdown(mdPath);
+        const theme = getTheme(currentThemeId);
+        let htmlContent = buildZhihuCopyHtml(bodyHtml, templatePath, theme);
+
+        htmlContent = zhihu.normalizeCodeBlocks(htmlContent);
+        htmlContent = zhihu.normalizeImagesForZhihu(htmlContent);
+
+        panel.webview.postMessage({ type: 'zhihuPublishProgress', message: '正在上传图片...' });
+        const uploadResult = await zhihu.uploadImagesInHtml(htmlContent, cookieStr, (done, total) => {
+          panel.webview.postMessage({ type: 'zhihuPublishProgress', message: `正在上传图片 ${done}/${total}...` });
+        });
+        htmlContent = uploadResult.html;
+
+        panel.webview.postMessage({ type: 'zhihuPublishProgress', message: '正在保存草稿...' });
+        const result = await zhihu.saveAsDraft({ articleId: existingId || null, title: title.trim(), htmlContent, cookieStr });
+
+        const mapKey = 'zhihu.articleIdMap';
+        const map = extContext.globalState.get(mapKey, {});
+        map[mdPath] = result.articleId;
+        await extContext.globalState.update(mapKey, map);
+
+        log(`知乎草稿保存成功: ${result.editUrl}`);
+        panel.webview.postMessage({ type: 'zhihuDraftResult', success: true, articleId: result.articleId, editUrl: result.editUrl });
+        vscode.window.showInformationMessage('✅ 草稿已保存！可在知乎编辑器预览效果。', '打开编辑器').then(a => {
+          if (a === '打开编辑器') vscode.env.openExternal(vscode.Uri.parse(result.editUrl));
+        });
+      } catch (err) {
+        log(`知乎草稿保存失败: ${err.message}`);
+        panel.webview.postMessage({ type: 'zhihuDraftResult', success: false, error: err.message });
+      }
+      break;
+    }
+
     default:
       break;
   }
@@ -1463,6 +1517,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           </div>
           <div class="panel-actions" style="margin-top:14px;">
             <button class="btn btn-zhihu-publish" id="btn-zhihu-do-publish">发布文章</button>
+            <button class="btn btn-secondary" id="btn-zhihu-save-draft" title="保存为草稿，可在知乎官网预览效果后再发布">保存草稿</button>
           </div>
           <p class="hint" id="zhihu-publish-progress" style="margin-top:8px;display:none;"></p>
           <div class="upload-result" id="zhihu-publish-result"></div>
@@ -2008,6 +2063,13 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       vscode.postMessage({ type: 'zhihuPublish', title, articleId: articleId || null });
     });
 
+    document.getElementById('btn-zhihu-save-draft').addEventListener('click', () => {
+      const title     = document.getElementById('zhihu-input-title').value.trim();
+      const articleId = document.getElementById('zhihu-input-article-id').value.trim();
+      if (!title) { showToast('请填写文章标题', 'error'); return; }
+      vscode.postMessage({ type: 'zhihuSaveDraft', title, articleId: articleId || null });
+    });
+
     // 扫码轮询定时器
     let _zhihuQrTimer = null;
     function startZhihuQrPoll() {
@@ -2419,9 +2481,10 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         case 'zhihuPublishStart': {
           const btn = document.getElementById('btn-zhihu-do-publish');
           btn.disabled = true; btn.textContent = '⏳ 发布中...';
+          document.getElementById('btn-zhihu-save-draft').disabled = true;
           document.getElementById('zhihu-publish-result').style.display = 'none';
           const prog = document.getElementById('zhihu-publish-progress');
-          prog.textContent = '准备发布...';
+          prog.textContent = '准备中...';
           prog.style.display = '';
           break;
         }
@@ -2440,13 +2503,13 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         case 'zhihuPublishResult': {
           const btn = document.getElementById('btn-zhihu-do-publish');
           btn.disabled = false; btn.textContent = '发布文章';
+          document.getElementById('btn-zhihu-save-draft').disabled = false;
           document.getElementById('zhihu-publish-progress').style.display = 'none';
           const res = document.getElementById('zhihu-publish-result');
           if (msg.success) {
             res.className = 'upload-result success';
             res.innerHTML = \`✅ 发布成功！<br><a href="\${msg.url}" style="color:#4fc3f7;word-break:break-all;" title="\${msg.url}">\${msg.url}</a>\`;
             showToast('知乎发布成功！', 'success');
-            // 保存文章 ID，供下次更新用
             if (msg.articleId) {
               document.getElementById('zhihu-input-article-id').value = msg.articleId;
             }
@@ -2454,6 +2517,27 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
             res.className = 'upload-result error';
             res.textContent = \`❌ 发布失败：\${msg.error || '未知错误'}\`;
             showToast('发布失败', 'error');
+          }
+          res.style.display = 'block';
+          break;
+        }
+        case 'zhihuDraftResult': {
+          const btn = document.getElementById('btn-zhihu-do-publish');
+          btn.disabled = false; btn.textContent = '发布文章';
+          document.getElementById('btn-zhihu-save-draft').disabled = false;
+          document.getElementById('zhihu-publish-progress').style.display = 'none';
+          const res = document.getElementById('zhihu-publish-result');
+          if (msg.success) {
+            res.className = 'upload-result success';
+            res.innerHTML = \`📝 草稿已保存！<br><a href="\${msg.editUrl}" style="color:#4fc3f7;">打开知乎草稿箱查看效果</a>\`;
+            showToast('草稿保存成功！', 'success');
+            if (msg.articleId) {
+              document.getElementById('zhihu-input-article-id').value = msg.articleId;
+            }
+          } else {
+            res.className = 'upload-result error';
+            res.textContent = \`❌ 保存草稿失败：\${msg.error || '未知错误'}\`;
+            showToast('保存草稿失败', 'error');
           }
           res.style.display = 'block';
           break;
