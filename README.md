@@ -2,6 +2,19 @@
 
 ## 更新日志
 
+### v2.0.4
+- **修复**：知乎图片上传改为两阶段 ali-oss 方案（md5 预取 + OSS 上传），解决上传失败问题。
+- **新增**：知乎支持保存草稿，可在知乎官网预览后再发布。
+- **修复**：知乎代码块输出 `<pre lang="xxx">` 纯文本格式，符合知乎编辑器识别标准。
+- **修复**：微信复制公式改用 mdnice 内联 SVG 格式，避免 data URI 被公众号编辑器清洗。
+- **修复**：微信复制代码高亮丢失、`< > &` 被二次转义、代码缩进/空格丢失等问题。
+
+### v2.0.3
+- **修复**：知乎发布后图片不显示的问题——新增 `normalizeImagesForZhihu()`，去掉 `<figure>` 包裹和 `img style`，适配知乎 HTML 过滤规则。
+- **新增**：知乎发布失败不再静默吞掉，改为显式上报失败数量和错误信息。
+- **新增**：发布成功后自动保存 `md文件路径 → 知乎文章ID` 映射，再次打开发布面板自动填入，重复发布变更新操作。
+- **新增**：发布进度实时显示在面板内。
+
 ### v2.0.2
 - **优化**：小红书截图输出分辨率提升至 2x（`deviceScaleFactor: 2`），导出图片宽度从 1080px 提升至 2160px，文字和图片更清晰，符合小红书高清上传标准。
 
@@ -23,8 +36,9 @@
 
 | 功能 | 说明 |
 |------|------|
-| � **复制微信** | 一键复制带内联样式的 HTML，直接粘贴到微信公众号编辑器 |
-| 📝 **复制知乎** | 公式转知乎图片格式，直接粘贴到知乎编辑器 |
+| 🐧 **复制微信** | 一键复制带内联样式的 HTML，公式转 SVG，代码高亮保留，直接粘贴到微信公众号编辑器 |
+| 📝 **复制知乎** | 一键复制到知乎编辑器，代码块保留语言标识，公式转图片 |
+| 🚀 **发布知乎文章** | 登录知乎后，自动上传图片（ali-oss 方案）并发布或保存草稿；二次发布自动更新已有文章 |
 | 📱 **复制小红书** | 带内联样式的富文本，直接粘贴到小红书长文编辑器 |
 | 📸 **导出小红书图片** | 将文章自动截图为多张适合小红书发布的图片 |
 | 🎨 **10 套内置主题** | 微信经典 / Claude / macOS / 深夜极客 / 知乎 / 极简黑白 / 春日清新 / 学术论文 / 小红书 / Notion |
@@ -44,8 +58,8 @@
 
 ```bash
 # 克隆到本地
-git clone https://github.com/marsggbo/md2wechat.git
-cd md2wechat
+git clone https://github.com/marsggbo/markdown2anything.git
+cd markdown2anything
 
 # 安装依赖
 npm install
@@ -62,12 +76,12 @@ npm install -g @vscode/vsce
 vsce package
 
 # 安装生成的 .vsix 文件
-code --install-extension md2wechat-1.9.1.vsix
+code --install-extension markdown2anything-2.0.4.vsix
 ```
 
 ### 方式三：VS Code 扩展市场
 
-在扩展市场搜索 `MD Export` 或 `marsggbo.md2wechat` 一键安装。
+在扩展市场搜索 `MD Export` 或 `marsggbo.markdown2anything` 一键安装。
 
 ---
 
@@ -79,8 +93,8 @@ code --install-extension md2wechat-1.9.1.vsix
 
 ```bash
 # 克隆仓库
-git clone https://github.com/marsggbo/md2wechat.git
-cd md2wechat
+git clone https://github.com/marsggbo/markdown2anything.git
+cd markdown2anything
 
 # 安装依赖
 npm install
@@ -182,6 +196,17 @@ npm run build:mac:universal
 > ⚠️ **安全提示**：上传功能通过 [FastPen](https://www.fastpen.online) 第三方服务实现，您的 AppSecret 会被发送至该服务。请确认您信任该服务后再使用。
 >
 > 如不希望使用第三方服务，请使用「复制内容」手动粘贴到编辑器。
+
+### 🚀 发布知乎
+
+点击 **「发布知乎」** 打开知乎发布侧栏。首次使用需登录知乎 Cookie：
+
+1. 在 Chrome 打开知乎，登录后按 `F12` → Application → Cookies → `zhihu.com`，复制 `cookie` 字段值
+2. 将 Cookie 粘贴到发布侧栏的 Cookie 输入框，点击「保存」
+3. 填写文章标题，选择发布方式（**发布** 或 **保存草稿**）
+4. 点击「发布」，图片自动上传后完成发布
+
+> 再次对同一 `.md` 文件发布，插件会自动填入上次的文章 ID，变为更新操作（PUT），不会重复创建。
 
 ### 💾 导出 HTML
 
@@ -317,7 +342,7 @@ juice 内联 CSS（仅导出模式）
 ## 项目结构
 
 ```
-md2wechat/
+markdown2anything/
 ├── extension.js          # VS Code 扩展主入口
 ├── package.json          # 扩展清单 + Electron 脚本
 ├── electron-builder.yml  # Electron 打包配置
