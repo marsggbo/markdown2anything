@@ -87,10 +87,17 @@ const PLATFORMS = {
     authCookies: ['auth_token'],
     loginUrlPattern: /\/(login|i\/flow\/login)/i,
   },
+  zhihu: {
+    name: '知乎',
+    loginUrl:   'https://www.zhihu.com/signin',
+    publishUrl: 'https://zhuanlan.zhihu.com/write',
+    authCookies: ['z_c0'],
+    loginUrlPattern: /\/signin|\/login/i,
+  },
 };
 
 /** 每个平台一个固定调试端口，resume 时用 connectOverCDP 重连这个还开着的浏览器 */
-const CDP_PORT = { xiaohongshu: 9223, twitter: 9224 };
+const CDP_PORT = { xiaohongshu: 9223, twitter: 9224, zhihu: 9225 };
 function cdpEndpoint() { return `http://127.0.0.1:${CDP_PORT[platform] || 9225}`; }
 
 /**
@@ -137,6 +144,8 @@ async function getBrowser(headless) {
     viewport: { width: 1400, height: 950 },
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   });
+  // 知乎发布要往剪贴板写 HTML 再粘进编辑器，需要剪贴板权限
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
   _browser = browser; _ownsBrowser = true;   // 我们开的，退出时负责关掉
   return { browser, context, reused: false };
 }
@@ -233,6 +242,8 @@ async function doPublish(jobFile, resume) {
       await publishTwitter(page, def, { tweets: list, link, images, mode, autoNumber, linkPos, oneImagePerTweet });
     } else if (platform === 'xiaohongshu') {
       await publishXiaohongshu(page, def, { title, body, tags, images, mode });
+    } else if (platform === 'zhihu') {
+      await publishZhihu(page, def, { title, html: job.html || '', images, mode });
     }
 
     // 一律不自动关窗。默认 prepare 模式下也【不替用户点发布】——
@@ -575,6 +586,161 @@ function truncateByWeight(text, budget) {
     out += ch;
   }
   return out + '…';
+}
+
+// ─── 知乎：用编辑器自己的通道传图 + 粘贴干净 HTML ────────────────────────────
+/**
+ * 知乎为什么必须走浏览器：
+ *   知乎没有公开 API，且会主动改内部接口来搞挂第三方工具 —— 直接调 api.zhihu.com/images
+ *   传图迟早（且已经）失效。用编辑器自己的上传通道，走的是它自家的正常流程，最稳。
+ *
+ * 流程：
+ *   ① 打开 /write，填标题
+ *   ② 把本地图片依次喂给编辑器的 file input，让【知乎自己】把图传上去，
+ *      回读编辑器里生成的 <img> 的 CDN 地址（zhimg.com）
+ *   ③ 清空编辑器，把 CDN 地址替换进我们那份干净 HTML
+ *   ④ 通过剪贴板把 HTML 整体粘进编辑器（公式 eeimg / 代码 pre lang 都能被知乎识别）
+ *   ⑤ 停在发布前，由用户自己点「发布」
+ */
+/**
+ * 起一个临时本地图床（带 CORS），把本地图片变成真正的 http:// 地址。
+ * 这样粘贴进知乎编辑器时，它会把这些图当成"从网页复制来的远程图"，
+ * 自己抓取并上传到 zhimg 图床 —— 全程不用碰它那些弹窗和文件对话框。
+ */
+function startImageServer(images) {
+  const http = require('http');
+  const map = new Map();                       // /i0.png -> 本地路径
+  images.forEach((p, i) => map.set(`/i${i}${path.extname(p) || '.png'}`, p));
+
+  const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
+
+  const server = http.createServer((req, res) => {
+    const key = decodeURIComponent((req.url || '').split('?')[0]);
+    const file = map.get(key);
+    res.setHeader('Access-Control-Allow-Origin', '*');   // 关键：让知乎的页面能跨域抓
+    if (!file || !fs.existsSync(file)) { res.statusCode = 404; res.end('not found'); return; }
+    res.setHeader('Content-Type', MIME[path.extname(file).toLowerCase()] || 'application/octet-stream');
+    fs.createReadStream(file).pipe(res);
+  });
+
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      resolve({
+        server, port,
+        urls: images.map((p, i) => `http://127.0.0.1:${port}/i${i}${path.extname(p) || '.png'}`),
+      });
+    });
+  });
+}
+
+async function publishZhihu(page, def, { title, html, images, mode }) {
+  const totalSteps = 4;
+  step(0, totalSteps, '打开知乎写文章页');
+  await page.goto(def.publishUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
+
+  if (def.loginUrlPattern.test(page.url())) throw new Error('知乎 cookie 已失效，请重新登录');
+
+  // ── 标题 ──
+  const titleBox = page.locator('textarea[placeholder*="标题"], input[placeholder*="标题"]').first();
+  await titleBox.waitFor({ state: 'visible', timeout: 40000 })
+    .catch(() => { throw new Error('未找到标题输入框（页面结构可能已变化）'); });
+  await titleBox.click();
+  await titleBox.fill(String(title || '').slice(0, 100));
+  info('已填标题');
+
+  // ── 正文编辑器 ──
+  const editor = page.locator('.public-DraftEditor-content, div[contenteditable="true"]').first();
+  await editor.waitFor({ state: 'visible', timeout: 30000 })
+    .catch(() => { throw new Error('未找到正文编辑器'); });
+
+  // ── ② 把本地图变成 http:// 地址（临时本地图床，带 CORS）──
+  //
+  // 之前三轮都栽在同一个地方：跟知乎编辑器的【图片弹窗 / 文件对话框】搏斗。
+  // 那条路上到处是坑（附件框和图片框长得一样、传完还得点「插入图片」、弹窗会叠加…），
+  // 每修一处就冒出新的一处。
+  //
+  // 现在彻底绕开它：编辑器对【粘贴进来的远程图片】本来就会自动抓取并上传到自己图床，
+  // 它不认的只是 data: 开头的本地图。所以把图片用本地 HTTP 服务暴露成真正的 http:// 地址，
+  // 连同正文一起粘贴 —— 一个弹窗都不用碰。
+  step(1, totalSteps, '准备图片');
+  let imgServer = null;
+  let finalHtml = html;
+
+  if (images && images.length) {
+    imgServer = await startImageServer(images);
+    info(`已起临时本地图床（端口 ${imgServer.port}），${images.length} 张图`);
+    let i = 0;
+    finalHtml = finalHtml.replace(/src="data:image[^"]*"/g, () => {
+      const u = imgServer.urls[i++];
+      return u ? `src="${u}"` : 'src=""';
+    });
+  }
+
+  // ── ③ 整篇粘贴（正文 + 图片一次性进去）──
+  step(2, totalSteps, '粘贴正文和图片');
+  const plain = finalHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+  await editor.click();
+  await editor.evaluate((el, { h, p }) => {
+    el.focus();
+    const dt = new DataTransfer();
+    dt.setData('text/html', h);
+    dt.setData('text/plain', p);
+    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  }, { h: finalHtml, p: plain }).catch(() => {});
+
+  await page.waitForTimeout(3000);
+
+  let got = (await editor.innerText().catch(() => '')) || '';
+  if (got.trim().length < Math.min(40, plain.length * 0.3)) {
+    await dumpDiag(page, 'zhihu_paste_failed');
+    throw new Error(`正文没能填进编辑器（只有 ${got.trim().length} 字，预期约 ${plain.length} 字）`);
+  }
+  info(`正文已填入（${got.trim().length} 字）`);
+
+  // ── ④ 等知乎把这些远程图抓走、换成它自己的 zhimg 图床地址 ──
+  if (imgServer) {
+    step(3, totalSteps, '等知乎抓取图片');
+    info('等待知乎把图片抓取并上传到它自己的图床…');
+    let zhimg = 0, localLeft = images.length;
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline) {
+      const st = await editor.evaluate(el => {
+        const srcs = [...el.querySelectorAll('img')].map(i => i.getAttribute('src') || i.src || '');
+        return {
+          zhimg: srcs.filter(s => /zhimg\.com/.test(s)).length,
+          local: srcs.filter(s => /127\.0\.0\.1/.test(s)).length,
+        };
+      }).catch(() => ({ zhimg: 0, local: 0 }));
+      zhimg = st.zhimg; localLeft = st.local;
+      if (zhimg >= images.length || localLeft === 0) break;
+      await page.waitForTimeout(2000);
+    }
+
+    if (zhimg >= images.length) {
+      info(`✅ 知乎已把 ${zhimg} 张图全部上传到自己的图床`);
+    } else if (zhimg > 0) {
+      info(`⚠️ 只有 ${zhimg}/${images.length} 张图被知乎接管，其余可能要手动补（预览区「📋 复制图片」→ 粘贴）`);
+    } else {
+      await dumpDiag(page, 'zhihu_images_not_fetched');
+      info(`⚠️ 知乎没有自动抓取图片（正文和代码都在）。请用预览区图片上的「📋 复制图片」按钮，逐张粘贴到对应位置。`);
+    }
+    // 图床要留到浏览器关掉为止（知乎可能延迟抓取）
+    if (imgServer && zhimg >= images.length) {
+      setTimeout(() => { try { imgServer.server.close(); } catch (_) {} }, 30000);
+    }
+  }
+
+  step(4, totalSteps, '内容就绪');
+  if (mode !== 'auto') { info('✅ 标题、正文、图片都已填好。请核对后【自己点页面上的「发布」】。'); return; }
+
+  const pub = page.getByRole('button', { name: /发布/ }).first();
+  await pub.waitFor({ state: 'visible', timeout: 20000 }).catch(() => { throw new Error('未找到「发布」按钮'); });
+  await pub.click();
+  await page.waitForTimeout(5000);
+  info('已点击发布，请在浏览器确认结果');
 }
 
 // ─── 文案拼接 ───────────────────────────────────────────────────────────────

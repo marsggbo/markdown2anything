@@ -66,7 +66,7 @@ function activate(context) {
 
 function deactivate() {
   // 收掉常驻的发布 worker（连带关掉它开的浏览器），不留残窗
-  try { killWorker('xiaohongshu'); killWorker('twitter'); } catch (_) {}
+  try { killWorker('xiaohongshu'); killWorker('twitter'); killWorker('zhihu'); } catch (_) {}
   if (outputChannel) outputChannel.dispose();
 }
 
@@ -949,47 +949,44 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const cfg = vscode.workspace.getConfiguration('markdown2anything');
         const templateName = cfg.get('template', 'wechat');
         const templatePath = getTemplatePath(workspacePath, templateName);
+        // 走【真实浏览器】发布：知乎没有公开 API 且会主动改内部接口搞挂第三方工具，
+        // 之前直接调 api.zhihu.com 传图已经失效；而且当时把「剪贴板版」的带样式 HTML
+        // （258KB，每个标签都挂 inline style）直接丢给接口，被知乎的过滤器洗坏 —— 表现就是
+        // 代码折叠成一行、公式丢失、图片没传上去。
+        //
+        // 现在改成：干净的语义化 HTML + 用知乎编辑器自己的通道传图。
         const { bodyHtml } = renderMarkdown(mdPath);
-        const theme = getTheme(currentThemeId);
-        let htmlContent = buildZhihuCopyHtml(bodyHtml, templatePath, theme);
+        const cleanHtml = zhihu.buildPublishHtml(bodyHtml);       // <pre lang="python"> + eeimg 公式 + 无 style
+        const localImages = listMarkdownLocalImages(mdPath);      // 按出现顺序的本地图
+        const cookies = zhihuBrowserCookies();
 
-        // 处理代码块（去掉 hljs span，保留纯文本 + 内联样式）
-        htmlContent = zhihu.normalizeCodeBlocks(htmlContent);
-        // 规范化图片标签（去掉 figure 包裹和内联样式，知乎不支持这些）
-        htmlContent = zhihu.normalizeImagesForZhihu(htmlContent);
-
-        // 上传本地图片到知乎图床
-        panel.webview.postMessage({ type: 'zhihuPublishProgress', message: '正在上传图片...' });
-        const uploadResult = await zhihu.uploadImagesInHtml(htmlContent, cookieStr, (done, total, failed) => {
-          log(`图片上传进度: ${done}/${total}${failed ? `，失败 ${failed} 张` : ''}`);
-          panel.webview.postMessage({ type: 'zhihuPublishProgress', message: `正在上传图片 ${done}/${total}...` });
-        });
-        htmlContent = uploadResult.html;
-        if (uploadResult.failed > 0) {
-          log(`图片上传部分失败: ${uploadResult.failed}/${uploadResult.total}，错误：${uploadResult.errors.join('; ')}`);
-          panel.webview.postMessage({ type: 'zhihuPublishProgress', message: `⚠️ ${uploadResult.failed} 张图片上传失败，继续发布...` });
+        if (!cookies.length) {
+          panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: '未登录，请先扫码登录' });
+          break;
         }
 
-        panel.webview.postMessage({ type: 'zhihuPublishProgress', message: existingId ? '正在更新文章...' : '正在发布文章...' });
-
-        let result;
-        if (existingId) {
-          result = await zhihu.updateAndPublishArticle({ articleId: existingId, title: title.trim(), htmlContent, cookieStr });
-        } else {
-          result = await zhihu.createAndPublishArticle({ title: title.trim(), htmlContent, cookieStr });
-        }
-
-        // 保存文件路径 → 文章 ID 映射
-        const mapKey = 'zhihu.articleIdMap';
-        const map = extContext.globalState.get(mapKey, {});
-        map[mdPath] = result.articleId;
-        await extContext.globalState.update(mapKey, map);
-
-        log(`知乎发布成功: ${result.url}`);
-        panel.webview.postMessage({ type: 'zhihuPublishResult', success: true, articleId: result.articleId, url: result.url });
-        vscode.window.showInformationMessage(`✅ 知乎${existingId ? '更新' : '发布'}成功！`, '打开文章').then(a => {
-          if (a === '打开文章') vscode.env.openExternal(vscode.Uri.parse(result.url));
+        log(`知乎发布：正文 ${cleanHtml.length} 字节，本地图 ${localImages.length} 张`);
+        killWorker('zhihu');
+        const pcfg2 = vscode.workspace.getConfiguration('markdown2anything');
+        const result = await social.publish('zhihu', {
+          extensionPath: extContext.extensionUri.fsPath,
+          cookies,
+          content: { title: title.trim(), html: cleanHtml },
+          images: localImages,
+          mode: pcfg2.get('publish.mode', 'prepare'),
+          headless: false,
+          onChild: (c) => { lastChild.zhihu = c; },
+          onProgress: (m) => panel.webview.postMessage({ type: 'zhihuPublishProgress', message: m }),
+          onStep: (s) => panel.webview.postMessage({ type: 'zhihuPublishProgress', message: `[${s.done}/${s.total}] ${s.label}` }),
         });
+
+        panel.webview.postMessage({
+          type: 'zhihuPublishResult', success: true, browser: true,
+          message: result.status === 'ready'
+            ? '✅ 标题、正文、图片都已填好，请在浏览器里核对后自己点「发布」'
+            : '✅ 已提交发布，请在浏览器确认',
+        });
+        break;
       } catch (err) {
         log(`知乎发布失败: ${err.message}`);
         panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: err.message });
@@ -1060,10 +1057,10 @@ async function handleWebviewMessage(msg, panel, mdPath) {
 const LLM_SECRET_KEY = 'markdown2anything.llm.apiKey';
 
 /** 每个平台最近一次的发布 job 文件，用于「从断点继续发布」 */
-const lastJobFile = { xiaohongshu: null, twitter: null };
+const lastJobFile = { xiaohongshu: null, twitter: null, zhihu: null };
 
 /** 每个平台当前活着的 worker 子进程（worker 会常驻以保持浏览器打开） */
-const lastChild = { xiaohongshu: null, twitter: null };
+const lastChild = { xiaohongshu: null, twitter: null, zhihu: null };
 
 /** 杀掉上一个 worker（连带关掉它开的浏览器），避免开出一堆窗口 */
 function killWorker(platform) {
@@ -1283,6 +1280,38 @@ function exportXhsImages(mdPath, panel, platform, retried = false) {
     });
     proc.on('error', reject);
   });
+}
+
+/** 把已有的知乎 cookie 字符串转成 Playwright cookie 数组（复用现有扫码登录，不用重登） */
+function zhihuBrowserCookies() {
+  const str = extContext.globalState.get(zhihu.STORAGE_KEY, '') || '';
+  return str.split(/;\s*/).map(p => {
+    const i = p.indexOf('=');
+    if (i <= 0) return null;
+    return {
+      name: p.slice(0, i).trim(), value: p.slice(i + 1).trim(),
+      domain: '.zhihu.com', path: '/', expires: -1,
+      httpOnly: false, secure: true, sameSite: 'Lax',
+    };
+  }).filter(c => c && c.name && c.value);
+}
+
+/** 按 markdown 里出现的顺序列出所有【本地】图片的绝对路径（知乎发布要拿文件去喂上传控件） */
+function listMarkdownLocalImages(mdPath) {
+  try {
+    const raw = fs.readFileSync(mdPath, 'utf8');
+    const dir = path.dirname(mdPath);
+    const out = [];
+    const re = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+    let m;
+    while ((m = re.exec(raw)) !== null) {
+      const src = m[1];
+      if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) continue;  // 远程图跳过
+      const abs = path.isAbsolute(src) ? src : path.resolve(dir, src);
+      if (fs.existsSync(abs)) out.push(abs);
+    }
+    return out;
+  } catch (_) { return []; }
 }
 
 /**
@@ -1868,7 +1897,38 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       font-size: 16px;
     }
     .article-wrapper strong { font-weight: 600; color: rgb(0, 122, 170); }
-    .article-wrapper img { outline: none; text-decoration: none; max-width: 100%; display: block; margin: 0 auto; }
+    /* 预览区可自由选中（含图片）：
+       <img> 默认可拖拽，鼠标拖过图片会触发「拖动图片」而不是「扩展选区」，
+       导致框选一碰到图片就断掉、复制也带不上图。禁用拖拽即可正常框选。 */
+    .preview-scroll, .article-wrapper {
+      user-select: text;
+      -webkit-user-select: text;
+      cursor: auto;
+    }
+    .article-wrapper img {
+      outline: none; text-decoration: none; max-width: 100%; display: block; margin: 0 auto;
+      -webkit-user-drag: none;      /* 关键：别让拖拽抢走框选 */
+      user-select: auto;
+      -webkit-user-select: auto;
+    }
+
+    /* ── 图片悬浮工具条：复制图片 / 拖出去 ──
+       解决"知乎图片上传失败还得手动一张张传"的问题：
+       「复制图片」拷的是真正的 PNG 位图（不是 data URL），粘进知乎/公众号会被平台自动上传。 */
+    #img-hover-bar {
+      position: fixed; display: none; z-index: 9999;
+      gap: 6px; align-items: center;
+      background: rgba(30,30,30,.94); border: 1px solid #555; border-radius: 6px;
+      padding: 4px 6px; box-shadow: 0 2px 10px rgba(0,0,0,.4);
+      font-size: 12px; color: #eee;
+    }
+    #img-hover-bar button, #img-hover-bar .drag-handle {
+      background: #3a3a3a; color: #eee; border: none; border-radius: 4px;
+      padding: 4px 8px; font-size: 12px; cursor: pointer; white-space: nowrap;
+    }
+    #img-hover-bar button:hover, #img-hover-bar .drag-handle:hover { background: #4a4a4a; }
+    #img-hover-bar .drag-handle { cursor: grab; -webkit-user-drag: element; }
+    #img-hover-bar .ok { background: #2d7a3e; }
     .article-wrapper p { margin: 1.3em 0; }
     .article-wrapper h1 { font-size: 140%; color: #de7456; text-align: center; }
     .article-wrapper h2 {
@@ -3335,6 +3395,81 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     // ─── 初始化 ───
     vscode.postMessage({ type: 'ready' });
   </script>
+  <!-- 预览区图片：悬浮「复制图片 / 拖我」工具条 -->
+  <div id="img-hover-bar">
+    <button id="img-copy-btn" title="复制为真正的图片（PNG），可直接粘贴到知乎/公众号，平台会自动上传">📋 复制图片</button>
+    <span class="drag-handle" id="img-drag-handle" draggable="true" title="按住拖到知乎/公众号编辑器里">⠿ 拖我</span>
+  </div>
+  <script nonce="${nonce}">
+  (function(){
+    const bar  = document.getElementById('img-hover-bar');
+    const btn  = document.getElementById('img-copy-btn');
+    const grip = document.getElementById('img-drag-handle');
+    let cur = null;
+
+    function place(img){
+      const r = img.getBoundingClientRect();
+      bar.style.display = 'flex';
+      bar.style.top  = Math.max(4, r.top + 8) + 'px';
+      bar.style.left = Math.max(4, r.right - bar.offsetWidth - 8) + 'px';
+    }
+
+    document.addEventListener('mouseover', (e) => {
+      const img = e.target && e.target.closest ? e.target.closest('#preview-content img') : null;
+      if (img) { cur = img; place(img); }
+    });
+    document.addEventListener('mouseout', (e) => {
+      const to = e.relatedTarget;
+      if (to && to.closest && (to.closest('#img-hover-bar') || to.closest('#preview-content img'))) return;
+      bar.style.display = 'none';
+    });
+    const scroller = document.querySelector('.preview-scroll');
+    if (scroller) scroller.addEventListener('scroll', () => { if (cur && bar.style.display !== 'none') place(cur); });
+
+    /** 把 <img> 转成真正的 PNG Blob（data URL / 同源图都不会污染 canvas） */
+    function toPngBlob(img){
+      return new Promise((resolve, reject) => {
+        try {
+          const c = document.createElement('canvas');
+          c.width  = img.naturalWidth  || img.width;
+          c.height = img.naturalHeight || img.height;
+          c.getContext('2d').drawImage(img, 0, 0);
+          c.toBlob(b => b ? resolve(b) : reject(new Error('canvas 转 blob 失败')), 'image/png');
+        } catch (err) { reject(err); }
+      });
+    }
+
+    btn.addEventListener('click', async () => {
+      if (!cur) return;
+      const old = btn.textContent;
+      try {
+        // 关键：往剪贴板写的是 image/png 位图，不是 data URL。
+        // 这样粘进知乎/公众号，平台会把它当作"粘贴的图片"自动上传到自己的图床。
+        const blob = await toPngBlob(cur);
+        await navigator.clipboard.write([ new ClipboardItem({ 'image/png': blob }) ]);
+        btn.textContent = '✅ 已复制，去粘贴';
+        btn.classList.add('ok');
+      } catch (err) {
+        btn.textContent = '❌ ' + (err.message || '复制失败');
+      }
+      setTimeout(() => { btn.textContent = old; btn.classList.remove('ok'); }, 1800);
+    });
+
+    // 拖出去：用 DownloadURL 让它以"文件"的形式落到目标编辑器里
+    grip.addEventListener('dragstart', (e) => {
+      if (!cur) return;
+      const name = (cur.getAttribute('alt') || 'image').replace(/[^\\w\\u4e00-\\u9fa5.-]/g, '_') + '.png';
+      try {
+        e.dataTransfer.setData('DownloadURL', 'image/png:' + name + ':' + cur.src);
+        e.dataTransfer.setData('text/html', '<img src="' + cur.src + '">');
+        e.dataTransfer.setData('text/uri-list', cur.src);
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setDragImage(cur, 20, 20);
+      } catch (_) {}
+    });
+  })();
+  </script>
+
   <!-- 社交发布（小红书 / Twitter）客户端逻辑 -->
   <script nonce="${nonce}">
   (function(){
