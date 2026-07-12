@@ -1,0 +1,20 @@
+{
+  "name": "md2any-cli",
+  "version": "1.0.0",
+  "description": "一篇 Markdown，发到微信/知乎/小红书/Twitter。Markdown2Anything 的命令行版，可作为 Agent Skill 使用。",
+  "bin": {
+    "md2any": "./bin/md2any.js"
+  },
+  "main": "./lib/actions.js",
+  "license": "MIT",
+  "author": "marsggbo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marsggbo/markdown2anything",
+    "directory": "cli"
+  },
+  "keywords": ["markdown", "publish", "wechat", "zhihu", "xiaohongshu", "twitter", "cli", "agent", "skill"],
+  "engines": {
+    "node": ">=18"
+  }
+}

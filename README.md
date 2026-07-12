@@ -190,6 +190,26 @@ templates/                自定义导出模板
 
 ---
 
+## ⌨️ CLI / Agent Skill
+
+同一套能力也有**命令行版**，核心逻辑完全复用（不是另写一份）：
+
+```bash
+npm link ./cli
+
+md2any login xhs
+md2any images ./post.md
+md2any gen ./post.md --to twitter
+md2any publish ./post.md --to xhs,twitter
+```
+
+**stdout 只出结果、stderr 出日志、`--json` 给结构化输出** —— 为脚本和 Agent 设计。
+仓库里的 [`cli/SKILL.md`](./cli/SKILL.md) 是给 Agent 读的 skill 定义：把 `cli/` 挂进 Claude Code / OpenClaw 之类的 Agent，它就能听懂「把这篇文章发到小红书和推特」。
+
+详见 [cli/README.md](./cli/README.md)。
+
+---
+
 ## 🖥 独立桌面客户端
 
 不装 VS Code 也能用：
