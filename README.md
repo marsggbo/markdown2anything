@@ -1,407 +1,213 @@
-# MD Export — Markdown 一键导出微信 / 知乎 / 小红书
+# Markdown2Anything
 
-## 更新日志
+> **一篇 Markdown，一键发到所有平台。**
+> 微信公众号 · 知乎 · 小红书 · Twitter(X) —— 排版、配图、文案、发布，全自动。
 
-### v2.0.4
-- **修复**：知乎图片上传改为两阶段 ali-oss 方案（md5 预取 + OSS 上传），解决上传失败问题。
-- **新增**：知乎支持保存草稿，可在知乎官网预览后再发布。
-- **修复**：知乎代码块输出 `<pre lang="xxx">` 纯文本格式，符合知乎编辑器识别标准。
-- **修复**：微信复制公式改用 mdnice 内联 SVG 格式，避免 data URI 被公众号编辑器清洗。
-- **修复**：微信复制代码高亮丢失、`< > &` 被二次转义、代码缩进/空格丢失等问题。
+写完一篇技术博客，最烦的从来不是写作本身，而是后面那一堆**重复劳动**：
 
-### v2.0.3
-- **修复**：知乎发布后图片不显示的问题——新增 `normalizeImagesForZhihu()`，去掉 `<figure>` 包裹和 `img style`，适配知乎 HTML 过滤规则。
-- **新增**：知乎发布失败不再静默吞掉，改为显式上报失败数量和错误信息。
-- **新增**：发布成功后自动保存 `md文件路径 → 知乎文章ID` 映射，再次打开发布面板自动填入，重复发布变更新操作。
-- **新增**：发布进度实时显示在面板内。
+- 复制到微信 → 排版全乱、公式变乱码、代码高亮丢失
+- 复制到知乎 → 图片要一张张重传
+- 发小红书 → 得先把文章截成图，再手动拖进去，还要另写一份标题/正文/标签
+- 发 Twitter → 又要重写一遍，还得拆成串推，图还得再传一次
 
-### v2.0.2
-- **优化**：小红书截图输出分辨率提升至 2x（`deviceScaleFactor: 2`），导出图片宽度从 1080px 提升至 2160px，文字和图片更清晰，符合小红书高清上传标准。
+**Markdown2Anything 把这些全干掉。** 一篇 `.md`，一个面板，四个平台。
 
-### v2.0.1
-- **修复**：小红书截图导出在长文章（页面高度超过 16384px）时末尾内容丢失、图片重复的问题。改用分段滚动截图后精确拼接，突破 Chromium canvas 高度限制。
-
-### v2.0.0
-- 初始版本，支持微信 / 知乎 / 小红书一键导出，10 套主题，LaTeX 公式，Playwright 截图，微信草稿箱上传。
+![Twitter 发布面板](docs/images/panel-twitter.png)
 
 ---
 
-> 将 Markdown 文章一键渲染并导出到多个平台，支持 **LaTeX 公式**、**10 套内置主题**、**实时预览**、**一键复制（微信 / 知乎 / 小红书）**、**小红书图片截图导出** 和 **直接上传微信草稿箱**。
+## ✨ 核心能力
 
-支持两种形态：**VS Code 插件** 和 **独立桌面客户端**（Electron），互不依赖，按需选择。
+| 平台 | 能做什么 |
+|------|---------|
+| 🐧 **微信公众号** | 一键复制带内联样式的 HTML（公式转 SVG、代码高亮保留），或直接上传草稿箱 |
+| 📝 **知乎** | 扫码登录后**自动上传图片 + 发布/存草稿**，二次发布自动更新原文 |
+| 📱 **小红书** | 文章**自动截成长图** → **AI 写标题/正文/标签** → **注入 Cookie 自动传图填字** |
+| 🐦 **Twitter (X)** | AI 生成**中文串推（thread）**，图片按顺序切块配到各条，自动填好 |
+
+### 🤖 AI 文案生成（可选）
+
+- 接**任意 OpenAI 兼容接口**（DeepSeek / OpenRouter / Groq / 本地 Ollama / OpenAI…），面板里一键预设
+- **不配 Key 也能用**：内置**本地关键词提取算法**（中英混合 n-gram + 停用词过滤 + 长词吸收短词），零成本自动生成标题/正文/标签
+- **Prompt 可编辑**，不满意随时改了重新生成
+- **版本管理**：每次生成存一版，`◀ ▶` 左右切换对比，`🗑` 单独删除，旧版本永不自动丢失
+
+### 🔐 安全设计
+
+- **API Key 存进系统钥匙串**（VS Code SecretStorage），不落明文、不进 Settings Sync、不会被误提交进 git
+- **Cookie 只存本地**（globalState），唯一网络去向是平台自己，**不经过任何第三方服务**
+- 发布走 **Playwright 真实浏览器 + Cookie 注入**（模拟真人操作），而不是伪造签名的 HTTP 请求
+- 默认**不替你点最后那下「发布」**——内容和图都自动填好后停下，你核对无误再自己点
+
+### 🎨 其它
+
+10 套内置主题 · LaTeX 公式（KaTeX） · 实时预览 · 在线改 CSS · 目录导航 · 图片自动转 Base64（无需图床） · 导出 HTML
 
 ---
 
-## 功能特性
+## 📸 效果预览
 
-| 功能 | 说明 |
-|------|------|
-| 🐧 **复制微信** | 一键复制带内联样式的 HTML，公式转 SVG，代码高亮保留，直接粘贴到微信公众号编辑器 |
-| 📝 **复制知乎** | 一键复制到知乎编辑器，代码块保留语言标识，公式转图片 |
-| 🚀 **发布知乎文章** | 登录知乎后，自动上传图片（ali-oss 方案）并发布或保存草稿；二次发布自动更新已有文章 |
-| 📱 **复制小红书** | 带内联样式的富文本，直接粘贴到小红书长文编辑器 |
-| 📸 **导出小红书图片** | 将文章自动截图为多张适合小红书发布的图片 |
-| 🎨 **10 套内置主题** | 微信经典 / Claude / macOS / 深夜极客 / 知乎 / 极简黑白 / 春日清新 / 学术论文 / 小红书 / Notion |
-| 📐 **LaTeX 公式渲染** | 支持行内公式 `$...$` 和独立公式块 `$$...$$`，基于 KaTeX 渲染 |
-| 🖼️ **图片说明文字** | Markdown 图片的 alt 文本自动渲染为居中灰色 caption |
-| 👁️ **实时预览面板** | 在 VS Code 右侧打开独立预览窗口，文件保存时自动刷新 |
-| 🎨 **在线样式编辑** | 通过 CSS 编辑器实时修改文章样式，所见即所得 |
-| ☁️ **一键上传草稿箱** | 直接上传到微信公众号草稿箱（通过 FastPen 服务） |
-| 💾 **导出 HTML** | 导出带完整内联样式的 HTML 文件，可直接在浏览器打开 |
-| 🔌 **本地运行** | 图片自动转 Base64 内嵌，无需图床 |
+| 小红书：长图 + AI 文案 + 自动发布 | Twitter：AI 串推 + 分条预览 + 版本切换 |
+|:---:|:---:|
+| ![小红书面板](docs/images/panel-xhs.png) | ![Twitter 面板](docs/images/panel-twitter.png) |
 
 ---
 
-## 安装
+## 🚀 安装
 
-### 方式一：从源码安装（开发模式）
+### VS Code 扩展市场（推荐）
+
+在 VS Code 扩展面板搜索 **`Markdown2Anything`** 安装。
+
+### 从源码安装
 
 ```bash
-# 克隆到本地
 git clone https://github.com/marsggbo/markdown2anything.git
 cd markdown2anything
-
-# 安装依赖
 npm install
-
-# 在 VS Code 中打开并按 F5 启动调试
-code .
+npm run install-ext      # 打包并安装到本地 VS Code
 ```
 
-### 方式二：安装 VSIX 包
+### 开发模式
 
 ```bash
-# 打包扩展
-npm install -g @vscode/vsce
-vsce package
-
-# 安装生成的 .vsix 文件
-code --install-extension markdown2anything-2.0.4.vsix
-```
-
-### 方式三：VS Code 扩展市场
-
-在扩展市场搜索 `MD Export` 或 `marsggbo.markdown2anything` 一键安装。
-
----
-
-## 独立桌面客户端（无需 VS Code）
-
-如果你不使用 VS Code，可以直接使用独立的桌面应用。基于 **Electron** 构建，**完全免费、无需安装 VS Code**。
-
-### 从源码运行
-
-```bash
-# 克隆仓库
-git clone https://github.com/marsggbo/markdown2anything.git
-cd markdown2anything
-
-# 安装依赖
 npm install
-
-# 启动桌面应用
-npm run start:electron
+# 用 VS Code 打开本目录，按 F5 启动调试
 ```
 
-### 打包为 macOS 应用
+> 首次使用截图/发布功能时会**自动下载 Chromium**（约 150MB），之后无需等待。
+
+---
+
+## 📖 快速开始
+
+打开任意 `.md` 文件，按 `Cmd/Ctrl + Shift + W` 打开预览面板。
+
+### 发小红书
+
+1. 点 **📸 导出小红书** → **💾 一键导出全部**（文章自动截成多张长图）
+2. 下方文案区：点 **✨ 生成文案（LLM）**，或直接用本地算法预填好的内容
+3. 首次点 **登录小红书** → 弹出浏览器扫码 → Cookie 自动存好（面板显示有效期倒计时）
+4. 点 **🚀 发布小红书** → 浏览器自动打开、自动传图、自动填标题/正文/标签
+5. **你核对一眼，点页面上的「发布」** —— 完成
+
+### 发 Twitter
+
+1. 点 **🐦 发布 Twitter**
+2. 点 **✨ 生成文案** —— AI 会根据长图张数**自动决定串推条数**（`条数 = ⌈图片数 ÷ 4⌉`），
+   并让**每条推文讲的就是它配的那几张图里的内容**
+3. 登录 → 发布 → 浏览器里自动填好整串 + 按顺序配图 → 你点「发帖」
+
+> 💡 每条推文的字数按 **X 的加权规则**实时计算（**中文算 2 个字符**，链接固定算 23），超限会标红并在发布前拦下。
+
+---
+
+## ⚙️ 配置
+
+| 配置项 | 说明 |
+|--------|------|
+| `markdown2anything.llm.baseUrl` | LLM 接口地址（OpenAI 兼容），如 `https://api.deepseek.com/v1` |
+| `markdown2anything.llm.model` | 模型名，如 `deepseek-chat` |
+| **API Key** | **不在设置里** —— 在面板的「⚙️ LLM 配置」里填，存进系统钥匙串 |
+| `markdown2anything.publish.mode` | `prepare`（默认）填好后停下由你点发布 / `auto` 全自动 |
+| `markdown2anything.publish.headless` | 是否隐藏发布时的浏览器窗口 |
+| `markdown2anything.appid` / `.appSecret` | 微信公众号草稿箱上传（经 FastPen 服务） |
+
+**LLM 预设**（面板下拉一键填好）：
+
+| 预设 | 是否免费 |
+|------|---------|
+| **本地 Ollama** | ✅ 完全免费、无需 Key、数据不出本机 |
+| OpenRouter | 带 `:free` 后缀的模型免费（需注册免费 Key） |
+| Groq | 有免费额度（需注册免费 Key） |
+| DeepSeek | 付费但很便宜，中文文案质量好 |
+
+---
+
+## 📁 文件产物
+
+```
+your-post/
+  my-article.md
+  my-article_xhs/            ← 自动生成的长图
+    xhs_01.png …
+  my-article_social.json     ← 文案 + 版本历史（可随文章一起 git 备份）
+```
+
+`_social.json` 保存了每个平台的**全部生成版本**（含来源和时间戳），换台机器、重开面板都不用重新生成。
+
+---
+
+## 🧭 工作原理
+
+```
+Markdown
+  ├─ marked + KaTeX + highlight.js  → HTML
+  ├─ juice                          → 内联样式（微信/知乎才认）
+  ├─ Playwright                     → 滚动截图 + 智能分片（在空白行处切）→ 长图
+  ├─ LLM（OpenAI 兼容）             → 平台化文案（标题/正文/标签/串推）
+  └─ Playwright + Cookie 注入       → 真实浏览器自动填内容 + 传图 → 你点发布
+```
+
+**为什么用真实浏览器，而不是调 API？**
+
+小红书没有公开的发布 API；X 的 API 自 2026 年 2 月起改为按次付费（**带链接的推文 $0.20/条**）。
+用 Cookie 注入真实浏览器、走正常 UI 流程，既免费，也比伪造签名的 HTTP 请求更不容易触发风控。
+
+---
+
+## 📂 项目结构
+
+```
+extension.js              VS Code 扩展主入口 + 预览面板 UI
+lib/
+  converter.js            Markdown → HTML（公式 / 代码 / 图片处理）
+  themes.js               10 套主题
+  zhihu.js                知乎登录 + 图片上传 + 发布
+  llm.js                  LLM 文案生成（OpenAI 兼容）
+  extract.js              本地关键词提取（不依赖大模型）
+  social.js               Cookie 管理 + 发布调度
+scripts/
+  xhs_screenshot.js       Playwright 长图截图 + 智能分片
+  social_worker.js        Playwright 发布 worker（小红书 / Twitter）
+  zhihu_login.js          知乎扫码登录
+electron/                 独立桌面客户端（可选，不依赖 VS Code）
+templates/                自定义导出模板
+```
+
+---
+
+## 🖥 独立桌面客户端
+
+不装 VS Code 也能用：
 
 ```bash
-# 打包为 DMG 安装包
-npm run build:mac
-
-# 或打包为通用二进制（Intel + Apple Silicon）
-npm run build:mac:universal
-```
-
-打包产物在 `dist/` 目录下，双击 `.dmg` 安装即可。
-
-### 桌面客户端功能
-
-桌面客户端与 VS Code 插件功能完全一致：
-
-- 📝 左侧 Markdown 编辑器 + 右侧实时预览（500ms 防抖刷新）
-- 🎨 10 套内置主题实时切换
-- 📋 一键复制到微信 / 知乎 / 小红书
-- 📸 Playwright 截图导出小红书图片
-- ☁️ 上传微信公众号草稿箱（FastPen）
-- 💾 导出内联样式 HTML 文件
-- ⌨️ 快捷键支持（`Cmd+O` 打开、`Cmd+S` 保存、`Cmd+N` 新建）
-
-> **注意**：桌面客户端与 VS Code 插件共用同一套核心转换库（`lib/converter.js`），功能完全一致，但**彼此独立运行**。
-
-### 编译目标选择
-
-| 命令 | 产物 | 适用场景 |
-|------|------|----------|
-| `npm run package` | `.vsix` | VS Code 插件安装 |
-| `npm run build:mac` | `.dmg` | macOS 独立桌面应用 |
-| `npm run start:electron` | 开发模式 | 本地开发调试 |
-
-两种编译目标互不干扰：
-- VS Code 插件打包时自动排除 `electron/` 目录，保持体积小
-- Electron 打包时通过 `extraMetadata` 覆盖入口为 `electron/main.js`
-
----
-
-## 快速开始
-
-1. 在 VS Code 中打开任意 `.md` 文件
-2. 点击编辑器右上角的 **`$(open-preview)` 预览微信公众号效果** 按钮
-3. 右侧弹出实时预览面板
-
-或使用快捷键：`Cmd+Shift+W`（macOS）/ `Ctrl+Shift+W`（Windows/Linux）
-
----
-
-## 预览面板功能
-
-预览面板顶部工具栏提供以下功能：
-
-### 📋 复制内容
-
-点击 **「复制内容」** 按钮，预览区域内容会被选中并复制到剪贴板。
-
-打开微信公众号编辑器后，直接 `Ctrl+V` / `Cmd+V` 粘贴即可保留格式。
-
-> **提示**：部分浏览器对剪贴板有权限限制，如复制失败请手动 `Ctrl+A` 全选后复制。
-
-### 🎨 修改样式
-
-点击 **「修改样式」** 打开 CSS 编辑侧栏，在文本框中输入 CSS 并点击「应用」：
-
-```css
-/* 示例：修改正文字体大小 */
-.article-wrapper p {
-  font-size: 18px;
-  line-height: 2;
-}
-
-/* 修改标题颜色 */
-.article-wrapper h2 {
-  color: #07c160;
-  border-bottom-color: #07c160;
-}
-```
-
-> 样式修改仅作用于当前预览，不影响导出的 HTML 文件。如需永久生效，请修改工作区的自定义模板（见下文）。
-
-### ☁️ 上传公众号
-
-点击 **「上传公众号」** 打开上传侧栏。首次使用需配置微信公众号信息：
-
-1. 填写 **AppID** 和 **AppSecret**（从微信公众平台获取，见下方说明）
-2. 填写文章标题、作者（可选）、摘要（可选）
-3. 点击「保存配置」→「上传草稿箱」
-
-> ⚠️ **安全提示**：上传功能通过 [FastPen](https://www.fastpen.online) 第三方服务实现，您的 AppSecret 会被发送至该服务。请确认您信任该服务后再使用。
->
-> 如不希望使用第三方服务，请使用「复制内容」手动粘贴到编辑器。
-
-### 🚀 发布知乎
-
-点击 **「发布知乎」** 打开知乎发布侧栏。首次使用需登录知乎 Cookie：
-
-1. 在 Chrome 打开知乎，登录后按 `F12` → Application → Cookies → `zhihu.com`，复制 `cookie` 字段值
-2. 将 Cookie 粘贴到发布侧栏的 Cookie 输入框，点击「保存」
-3. 填写文章标题，选择发布方式（**发布** 或 **保存草稿**）
-4. 点击「发布」，图片自动上传后完成发布
-
-> 再次对同一 `.md` 文件发布，插件会自动填入上次的文章 ID，变为更新操作（PUT），不会重复创建。
-
-### 💾 导出 HTML
-
-点击 **「导出 HTML」** 将文章导出为带完整内联样式的 HTML 文件，保存到工作区的 `build/wechat.html`。
-
----
-
-## 配置微信公众号 AppID / AppSecret
-
-1. 登录 [微信公众平台](https://mp.weixin.qq.com/)
-2. 进入「设置与开发」→「基本配置」
-3. 在「开发者 ID（AppID）」和「开发者密码（AppSecret）」中获取
-
-也可以在 VS Code 设置中直接配置（`Cmd+,` → 搜索 `markdown2anything`）：
-
-```json
-{
-  "markdown2anything.appid": "wxxxxxxxxxxx",
-  "markdown2anything.appSecret": "your-app-secret",
-  "markdown2anything.author": "作者名称",
-  "markdown2anything.digest": "文章摘要"
-}
+npm install
+npm run start:electron     # 直接运行
+npm run build:mac          # 打包成 macOS DMG
 ```
 
 ---
 
-## 公式语法
+## 📜 更新日志
 
-### 行内公式
+### v2.7.x — 社交平台自动发布
+- **新增 Twitter(X) 发布**：AI 生成中文串推、按图切块配图、X 加权字数（中文=2）实时校验
+- **新增小红书自动发布**：Cookie 注入真实浏览器，自动传图 + 填标题/正文/标签
+- **新增 AI 文案生成**：任意 OpenAI 兼容接口 + 可编辑 Prompt + **本地关键词提取兜底**（无需 Key）
+- **新增版本管理**：每次生成存一版，左右切换对比、单独删除，落盘到 `_social.json`
+- **安全加固**：API Key 改存系统钥匙串（SecretStorage）；Cookie 仅存本地，不经第三方
+- **体验**：登录态有效期倒计时、发布进度条、断点续传、全局复用单个浏览器窗口
 
-```markdown
-质能方程 $E = mc^2$ 是物理学的基础。
-```
-
-渲染效果：质能方程 $E = mc^2$ 是物理学的基础。
-
-### 独立公式块
-
-```markdown
-$$
-\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}
-$$
-```
+### v2.0.x — 基础能力
+- 微信 / 知乎 / 小红书导出与发布，10 套主题，LaTeX 公式，Playwright 截图，微信草稿箱上传
 
 ---
 
-## 图片说明文字
+## 📄 许可证
 
-Markdown 图片的 alt 文本会自动渲染为居中的灰色说明文字：
+MIT © [marsggbo](https://github.com/marsggbo)
 
-```markdown
-![这是图片说明文字](./images/example.png)
-```
+## 🙏 致谢
 
-渲染效果：图片下方会出现居中的灰色 caption 文字"这是图片说明文字"。
-
----
-
-## 自定义模板
-
-在工作区根目录创建 `templates/` 文件夹，放置自定义 HTML 模板：
-
-```
-your-project/
-├── templates/
-│   └── custom.html    ← 自定义模板
-├── article.md
-└── markdown2anything.config.json  (可选)
-```
-
-在 VS Code 设置中指定模板名称：
-
-```json
-{
-  "markdown2anything.template": "custom"
-}
-```
-
-模板中使用 `{{body}}` 作为文章内容占位符：
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    /* 自定义样式 */
-    body { font-family: sans-serif; }
-  </style>
-</head>
-<body>
-  {{body}}
-</body>
-</html>
-```
-
----
-
-## 内置样式说明
-
-| 元素 | 样式 |
-|------|------|
-| 文章标题 H1 | 居中，橙红色 `#de7456` |
-| 二级标题 H2 | 居中，橙红色 + 下划线 |
-| 三级标题 H3 | 左侧蓝色竖线装饰 |
-| 加粗 | 蓝色 `rgb(0,122,170)` |
-| 链接 | 橙色 |
-| 代码块 | macOS 风格（彩色圆点）+ 语法高亮 |
-| 行内代码 | 灰色背景 + 红色字体 |
-| 图片说明 | 居中，灰色 `#999`，14px |
-| 数学公式 | KaTeX 渲染，独立公式块居中 |
-
----
-
-## 工作原理
-
-```
-Markdown 文件
-    ↓
-gray-matter 解析 frontmatter
-    ↓
-marked + KaTeX 扩展（公式渲染）
-    ↓
-cheerio 处理（图片 Base64、代码高亮）
-    ↓
-juice 内联 CSS（仅导出模式）
-    ↓
-微信公众号兼容 HTML
-```
-
----
-
-## 项目结构
-
-```
-markdown2anything/
-├── extension.js          # VS Code 扩展主入口
-├── package.json          # 扩展清单 + Electron 脚本
-├── electron-builder.yml  # Electron 打包配置
-├── lib/
-│   ├── converter.js      # 核心转换逻辑（插件/客户端共用）
-│   └── themes.js         # 10 套内置主题定义
-├── electron/             # Electron 客户端
-│   ├── main.js           # 主进程（窗口/IPC/文件操作）
-│   ├── preload.js        # 安全的 context bridge
-│   └── renderer/
-│       └── index.html    # 渲染进程（编辑器 + 预览 UI）
-├── scripts/
-│   └── xhs_screenshot.js # Playwright 截图脚本
-├── templates/
-│   └── wechat.html       # 默认微信模板
-└── README.md
-```
-
----
-
-## 依赖说明
-
-| 包 | 用途 |
-|----|------|
-| `marked` | Markdown → HTML 解析器 |
-| `katex` | LaTeX 数学公式渲染 |
-| `highlight.js` | 代码语法高亮 |
-| `cheerio` | HTML DOM 操作（图片处理等） |
-| `juice` | CSS 内联处理（导出模式） |
-| `gray-matter` | Markdown frontmatter 解析 |
-
----
-
-## 对比 md2oa
-
-本项目在 [md2oa](https://github.com/shaogefenhao/md2oa) 基础上进行了以下改进：
-
-| 功能点 | md2oa | MD Export |
-|--------|-------|----------|
-| 公式渲染 | ❌ 不支持 | ✅ KaTeX 行内 + 块级 |
-| 图片说明文字 | ❌ 隐藏 | ✅ 居中灰色 caption |
-| 实时预览面板 | ❌ 仅导出文件 | ✅ 侧边实时预览 |
-| 一键复制 | ❌ | ✅ 微信 / 知乎 / 小红书 三平台 |
-| 小红书图片截图 | ❌ | ✅ 自动分页截图 |
-| 内置主题 | ❌ | ✅ 10 套主题 |
-| 在线样式编辑 | ❌ | ✅ |
-| 上传草稿箱 | ❌ | ✅（via FastPen） |
-
----
-
-## 许可证
-
-MIT
-
----
-
-## 致谢
-
-- [md2oa](https://github.com/shaogefenhao/md2oa) — 原始项目，提供核心转换思路
-- [markdown2weixin](https://github.com/Cici2014/markdown2weixin) — 上传接口集成参考
-- [KaTeX](https://katex.org/) — 高质量公式渲染
-- [FastPen](https://www.fastpen.online) — 微信草稿箱上传 API
+[marked](https://github.com/markedjs/marked) · [KaTeX](https://katex.org/) · [juice](https://github.com/Automattic/juice) · [Playwright](https://playwright.dev/) · [highlight.js](https://highlightjs.org/)

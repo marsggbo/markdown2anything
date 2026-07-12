@@ -1,8 +1,8 @@
 {
   "name": "markdown2anything",
-  "displayName": "Markdown2Anything - Markdown 导出微信/知乎/小红书",
-  "description": "将 Markdown 一键导出到微信公众号/知乎/小红书，支持 LaTeX 公式、目录预览、10 套主题、实时预览、小红书截图导出",
-  "version": "2.0.4",
+  "displayName": "Markdown2Anything — 一篇 Markdown 一键发到微信/知乎/小红书/Twitter",
+  "description": "写完一篇 Markdown，一键发布到微信公众号、知乎、小红书、Twitter(X)：自动截长图、AI 生成平台文案与串推、自动传图填字。支持 LaTeX 公式、10 套主题、实时预览。",
+  "version": "2.7.1",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",
@@ -19,18 +19,25 @@
   ],
   "keywords": [
     "markdown",
-    "wechat",
     "markdown2anything",
+    "wechat",
     "微信公众号",
     "小红书",
+    "xiaohongshu",
     "知乎",
-    "公式",
+    "zhihu",
+    "twitter",
+    "X",
+    "社交媒体",
+    "一键发布",
+    "publish",
+    "AI",
+    "LLM",
+    "文案生成",
     "LaTeX",
     "KaTeX",
     "preview",
-    "export",
-    "toc",
-    "目录"
+    "export"
   ],
   "repository": {
     "type": "git",
@@ -128,6 +135,48 @@
           "type": "string",
           "default": "build",
           "description": "导出 HTML 的目录（相对于工作区根目录）"
+        },
+        "markdown2anything.llm.baseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "文案生成用的 LLM 接口地址（OpenAI 兼容 /chat/completions）。可填 DeepSeek、Claude 中转、本地 Ollama 等任意 OpenAI 格式端点。"
+        },
+        "markdown2anything.llm.model": {
+          "type": "string",
+          "default": "gpt-4o-mini",
+          "description": "文案生成用的模型名，如 deepseek-chat、gpt-4o、claude-sonnet-4 等。"
+        },
+        "markdown2anything.twitter.backend": {
+          "type": "string",
+          "enum": [
+            "playwright",
+            "web-intent"
+          ],
+          "default": "playwright",
+          "description": "Twitter 发布后端。playwright：注入 cookie 模拟真浏览器自动发布（推荐）；web-intent：打开预填发推框手动发。"
+        },
+        "markdown2anything.xhs.backend": {
+          "type": "string",
+          "enum": [
+            "playwright",
+            "manual"
+          ],
+          "default": "playwright",
+          "description": "小红书发布后端。playwright：注入 cookie 模拟真浏览器自动发布；manual：仅导出长图 + 复制富文本手动发。"
+        },
+        "markdown2anything.publish.headless": {
+          "type": "boolean",
+          "default": false,
+          "description": "自动发布时是否隐藏浏览器窗口。关闭（默认）时你能看到发布全过程，出错可手动接管。"
+        },
+        "markdown2anything.publish.mode": {
+          "type": "string",
+          "enum": [
+            "prepare",
+            "auto"
+          ],
+          "default": "prepare",
+          "description": "prepare（默认，推荐）：自动传图 + 自动填文后停下，最后一步「发布」由你在页面上自己点（更稳，发出前还能再核对一遍）；auto：连发布键也自动点（小红书有二次确认弹窗，容易发布失败，不推荐）。"
         }
       }
     }
