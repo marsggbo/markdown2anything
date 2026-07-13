@@ -1,0 +1,8 @@
+# prepack 时从主仓库 vendored 进来的副本（不入库，避免与源文件重复）
+/scripts/
+/lib/converter.js
+/lib/themes.js
+/lib/zhihu.js
+/lib/llm.js
+/lib/extract.js
+/lib/social.js

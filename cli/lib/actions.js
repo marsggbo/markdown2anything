@@ -2,13 +2,17 @@
 
 /**
  * CLI 的核心动作。**全部复用插件已有的 lib/ 和 scripts/**，不重写任何逻辑：
- *   ../../lib/converter.js       Markdown → HTML
- *   ../../lib/zhihu.js           知乎干净发布 HTML（<pre lang> + eeimg 公式）
- *   ../../lib/llm.js             LLM 文案生成（OpenAI 兼容）
- *   ../../lib/extract.js         本地关键词提取（无需 API Key）
- *   ../../lib/social.js          Cookie 管理 + Playwright 发布调度
- *   ../../scripts/xhs_screenshot.js   长图截图
- *   ../../scripts/social_worker.js    发布 worker
+ *   lib/converter.js        Markdown → HTML
+ *   lib/zhihu.js            知乎干净发布 HTML（<pre lang> + eeimg 公式）
+ *   lib/llm.js              LLM 文案生成（OpenAI 兼容）
+ *   lib/extract.js          本地关键词提取（无需 API Key）
+ *   lib/social.js           Cookie 管理 + Playwright 发布调度
+ *   scripts/xhs_screenshot.js   长图截图
+ *   scripts/social_worker.js    发布 worker
+ *
+ * 两种布局都要能跑：
+ *   ① 仓库内开发：  <repo>/cli/lib/actions.js  → 源文件在 <repo>/lib、<repo>/scripts
+ *   ② npm 安装后：  <pkg>/lib/actions.js      → 源文件已被 prepack vendored 到 <pkg>/lib、<pkg>/scripts
  */
 
 const fs    = require('fs');
@@ -16,14 +20,18 @@ const os    = require('os');
 const path  = require('path');
 const { spawn } = require('child_process');
 
-const ROOT = path.resolve(__dirname, '..', '..');   // 仓库根目录
+// ROOT = 同时含有 lib/ 和 scripts/ 的那个目录
+const PKG_ROOT  = path.resolve(__dirname, '..');        // npm 安装后：包根
+const REPO_ROOT = path.resolve(__dirname, '..', '..');  // 仓库内开发：仓库根
+const ROOT = fs.existsSync(path.join(PKG_ROOT, 'scripts', 'social_worker.js')) ? PKG_ROOT : REPO_ROOT;
+const LIB  = path.join(ROOT, 'lib');
 
-const converter = require(path.join(ROOT, 'lib', 'converter'));
-const themes    = require(path.join(ROOT, 'lib', 'themes'));
-const zhihu     = require(path.join(ROOT, 'lib', 'zhihu'));
-const llm       = require(path.join(ROOT, 'lib', 'llm'));
-const extract   = require(path.join(ROOT, 'lib', 'extract'));
-const social    = require(path.join(ROOT, 'lib', 'social'));
+const converter = require(path.join(LIB, 'converter'));
+const themes    = require(path.join(LIB, 'themes'));
+const zhihu     = require(path.join(LIB, 'zhihu'));
+const llm       = require(path.join(LIB, 'llm'));
+const extract   = require(path.join(LIB, 'extract'));
+const social    = require(path.join(LIB, 'social'));
 
 const store = require('./store');
 
@@ -75,7 +83,7 @@ function listLocalImages(md) {
 }
 
 function readMeta(md) {
-  const matter = require(path.join(ROOT, 'node_modules', 'gray-matter'));
+  const matter = require('gray-matter');
   const raw = fs.readFileSync(md, 'utf8');
   const p = matter(raw);
   const fm = p.data || {};

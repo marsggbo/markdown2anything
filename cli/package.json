@@ -1,20 +1,65 @@
 {
-  "name": "md2any-cli",
+  "name": "md2any",
   "version": "1.0.0",
-  "description": "一篇 Markdown，发到微信/知乎/小红书/Twitter。Markdown2Anything 的命令行版，可作为 Agent Skill 使用。",
+  "description": "一篇 Markdown，发到微信公众号 / 知乎 / 小红书 / Twitter(X)。自动截长图、AI 生成平台文案与串推、真实浏览器自动填内容传图。可作为 Agent Skill 使用。",
   "bin": {
     "md2any": "./bin/md2any.js"
   },
   "main": "./lib/actions.js",
   "license": "MIT",
   "author": "marsggbo",
+  "homepage": "https://github.com/marsggbo/markdown2anything/tree/main/cli",
   "repository": {
     "type": "git",
-    "url": "https://github.com/marsggbo/markdown2anything",
+    "url": "git+https://github.com/marsggbo/markdown2anything.git",
     "directory": "cli"
   },
-  "keywords": ["markdown", "publish", "wechat", "zhihu", "xiaohongshu", "twitter", "cli", "agent", "skill"],
+  "bugs": {
+    "url": "https://github.com/marsggbo/markdown2anything/issues"
+  },
+  "keywords": [
+    "markdown",
+    "publish",
+    "wechat",
+    "微信公众号",
+    "zhihu",
+    "知乎",
+    "xiaohongshu",
+    "小红书",
+    "twitter",
+    "x",
+    "cli",
+    "agent",
+    "skill",
+    "llm",
+    "playwright"
+  ],
   "engines": {
     "node": ">=18"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "scripts/",
+    "SKILL.md",
+    "README.md"
+  ],
+  "scripts": {
+    "prepack": "node ./scripts-build/vendor.js",
+    "test": "node ./scripts-build/smoke.js"
+  },
+  "dependencies": {
+    "ali-oss": "^6.23.0",
+    "cheerio": "^1.0.0-rc.12",
+    "gray-matter": "^4.0.3",
+    "highlight.js": "^11.9.0",
+    "juice": "^9.1.0",
+    "katex": "^0.16.0",
+    "marked": "^11.1.1",
+    "mathjax-full": "^3.2.1",
+    "md5": "^2.3.0",
+    "playwright-core": "^1.59.1",
+    "pngjs": "^7.0.0",
+    "qrcode": "^1.5.4"
   }
 }
