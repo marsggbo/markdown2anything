@@ -1,0 +1,16 @@
+{
+  "name": "md2ppt",
+  "version": "1.0.0",
+  "description": "把 Markdown 转换为 PPTX（支持 Slidev / Marp / Pandoc 三种引擎，依赖自动安装）",
+  "main": "md2ppt.js",
+  "bin": {
+    "md2ppt": "./md2ppt.js"
+  },
+  "keywords": ["markdown", "ppt", "pptx", "slidev", "marp", "pandoc", "skill"],
+  "author": "marsggbo",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "notes": "无运行时 npm 依赖：Slidev 通过 install-slidev 安装到 ~/.md2ppt/slidev/，pandoc 通过 install-pandoc 下载到 ~/.md2ppt/pandoc/bin/，Marp 通过 npx 自动获取"
+}
