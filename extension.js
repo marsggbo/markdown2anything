@@ -12,6 +12,8 @@ const llm = require('./lib/llm');
 const social = require('./lib/social');
 const extract = require('./lib/extract');
 const matter = require('gray-matter');
+const pandocManager = require('./lib/pandoc-manager');
+const slidevManager = require('./lib/slidev-manager');
 
 // ─────────────────────────────────────────────
 //  全局状态
@@ -61,6 +63,7 @@ function activate(context) {
         scheduleUpdate(mdPath);
       }
     }),
+
   );
 }
 
@@ -183,7 +186,7 @@ async function handlePreview(uri) {
 //  命令：导出 HTML
 // ─────────────────────────────────────────────
 
-async function handleConvert(uri) {
+async function handleConvert(uri, customOutputPath) {
   const mdPath = await resolveMdFilePath(uri);
   if (!mdPath) return;
 
@@ -192,7 +195,6 @@ async function handleConvert(uri) {
     const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
     const cfg = vscode.workspace.getConfiguration('markdown2anything');
     const templateName = cfg.get('template', 'wechat');
-    const outputDir = cfg.get('outputPath', 'build');
     const templatePath = getTemplatePath(workspacePath, templateName);
 
     if (!templatePath) {
@@ -200,7 +202,27 @@ async function handleConvert(uri) {
       return;
     }
 
-    const outputPath = path.join(workspacePath, outputDir, 'wechat.html');
+    // 输出路径优先级：webview 传入的自定义路径 > 配置项 > 默认同目录
+    let outputPath;
+    if (customOutputPath && path.isAbsolute(customOutputPath)) {
+      outputPath = customOutputPath;
+    } else if (customOutputPath) {
+      outputPath = path.join(path.dirname(mdPath), customOutputPath);
+    } else {
+      const savedDir = cfg.get('outputPath', '');
+      const base = path.basename(mdPath, path.extname(mdPath));
+      if (savedDir) {
+        const dir = path.isAbsolute(savedDir) ? savedDir : path.join(path.dirname(mdPath), savedDir);
+        outputPath = path.join(dir, `${base}.html`);
+      } else {
+        // 默认：与 md 文件同目录，同名
+        outputPath = path.join(path.dirname(mdPath), `${base}.html`);
+      }
+    }
+
+    const outputDir = path.dirname(outputPath);
+    if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
     log(`开始导出: ${mdPath}`);
     convertMarkdownToWeChat(mdPath, templatePath, outputPath);
     log(`导出完成: ${outputPath}`);
@@ -333,7 +355,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     }
 
     case 'exportHtml': {
-      await handleConvert(vscode.Uri.file(mdPath));
+      await handleConvert(vscode.Uri.file(mdPath), msg.outputPath || '');
       break;
     }
 
@@ -528,6 +550,35 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       currentThemeId = msg.themeId || DEFAULT_THEME_ID;
       // 重新渲染预览
       updatePreview(panel, mdPath);
+      break;
+    }
+
+    // 「→ 预览」按钮：webview 请求当前编辑器光标行，extension 立即推送 syncToLine
+    case 'requestCursorLine': {
+      const editors = vscode.window.visibleTextEditors.filter(
+        (e) => e.document.uri.fsPath === mdPath,
+      );
+      if (editors.length > 0) {
+        const line = editors[0].selection.active.line;
+        panel.webview.postMessage({ type: 'syncToLine', line });
+      }
+      break;
+    }
+
+    // 预览滚动 → 跳转到编辑器对应行（预览 → 编辑器方向，仅滚动不移光标）
+    case 'scrollToEditorLine': {
+      const targetLine = typeof msg.line === 'number' ? msg.line : 0;
+      const editors = vscode.window.visibleTextEditors.filter(
+        (e) => e.document.uri.fsPath === mdPath,
+      );
+      for (const editor of editors) {
+        const pos = new vscode.Position(targetLine, 0);
+        editor.revealRange(
+          new vscode.Range(pos, pos),
+          vscode.TextEditorRevealType.InCenterIfOutsideViewport,
+        );
+        // 不修改 selection，避免触发 onDidChangeTextEditorSelection 形成循环
+      }
       break;
     }
 
@@ -1048,6 +1099,128 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
+    case 'exportPpt': {
+      await handleExportPpt(msg, panel, mdPath);
+      break;
+    }
+
+    case 'cancelPpt': {
+      if (currentPptProc && !currentPptProc.killed) {
+        currentPptProc.kill('SIGTERM'); currentPptProc = null;
+      }
+      if (currentPptAbort) { currentPptAbort.abort(); currentPptAbort = null; }
+      panel.webview.postMessage({ type: 'pptResult', success: false, error: '已取消' });
+      break;
+    }
+
+    case 'getPptLlmInstruction': {
+      // backend 决定使用哪套默认 prompt
+      panel.webview.postMessage({
+        type: 'pptLlmInstruction',
+        instruction: llm.getDefaultPptInstruction(msg.backend || 'slidev'),
+      });
+      break;
+    }
+
+    case 'pptLlmGenerate': {
+      try {
+        panel.webview.postMessage({ type: 'pptLlmProgress', label: '正在调用 LLM 改写...' });
+        const { rawMarkdown } = renderMarkdown(mdPath);
+        const cfg = await getLlmConfig();
+        const abortCtrl = new AbortController();
+        currentPptAbort = abortCtrl;
+        const backend = msg.backend || 'slidev';
+        const pptMd = await llm.generatePptMarkdown({
+          rawMarkdown,
+          backend,
+          instruction: msg.instruction || '',
+          config: cfg,
+          signal: abortCtrl.signal,
+        });
+        currentPptAbort = null;
+        // 自动存版本
+        const store = addPptVersion(mdPath, backend, pptMd, msg.instruction || '');
+        panel.webview.postMessage({
+          type: 'pptLlmResult',
+          slidevMd: pptMd,
+          backend,
+          versions: pptVersionMeta(store, backend),
+        });
+      } catch (err) {
+        panel.webview.postMessage({ type: 'pptLlmError', message: err.message });
+      }
+      break;
+    }
+
+    case 'pptGetVersions': {
+      // webview 初始化时或切换 backend 时请求版本列表，同时加载当前版本内容
+      const backend = msg.backend || 'slidev';
+      const store   = loadPptStore(mdPath);
+      const meta    = pptVersionMeta(store, backend);
+      const b       = store[backend];
+      const current = (b.current >= 0 && b.versions[b.current]) ? b.versions[b.current].markdown : null;
+      panel.webview.postMessage({ type: 'pptVersionsLoaded', backend, versions: meta, current });
+      break;
+    }
+
+    case 'pptSaveVersion': {
+      // 用户手动编辑了 textarea 后点「保存当前版本」
+      const backend = msg.backend || 'slidev';
+      const store   = loadPptStore(mdPath);
+      const b       = store[backend];
+      if (b.current >= 0 && b.versions.length) {
+        b.versions[b.current].markdown = msg.markdown || '';
+        b.versions[b.current].at = new Date().toISOString();
+        savePptStore(mdPath, store);
+        panel.webview.postMessage({ type: 'pptVersionSaved', backend, versions: pptVersionMeta(store, backend) });
+      } else {
+        // 没有版本就新建
+        const s2 = addPptVersion(mdPath, backend, msg.markdown || '', '手动');
+        panel.webview.postMessage({ type: 'pptVersionSaved', backend, versions: pptVersionMeta(s2, backend) });
+      }
+      break;
+    }
+
+    case 'pptSwitchVersion': {
+      const backend = msg.backend || 'slidev';
+      const store   = loadPptStore(mdPath);
+      const b       = store[backend];
+      const idx     = Math.max(0, Math.min(msg.index, b.versions.length - 1));
+      b.current = idx;
+      savePptStore(mdPath, store);
+      panel.webview.postMessage({
+        type: 'pptVersionSwitched',
+        backend,
+        markdown: b.versions[idx].markdown,
+        versions: pptVersionMeta(store, backend),
+      });
+      break;
+    }
+
+    case 'pptDeleteVersion': {
+      const backend = msg.backend || 'slidev';
+      const store   = loadPptStore(mdPath);
+      const b       = store[backend];
+      if (!b.versions.length) break;
+      const idx = Math.max(0, Math.min(msg.index, b.versions.length - 1));
+      b.versions.splice(idx, 1);
+      b.current = b.versions.length ? Math.min(idx, b.versions.length - 1) : -1;
+      savePptStore(mdPath, store);
+      const current = (b.current >= 0 && b.versions[b.current]) ? b.versions[b.current].markdown : '';
+      panel.webview.postMessage({
+        type: 'pptVersionDeleted',
+        backend,
+        markdown: current,
+        versions: pptVersionMeta(store, backend),
+      });
+      break;
+    }
+
+    case 'exportWord': {
+      await handleExportWord(msg, panel, mdPath);
+      break;
+    }
+
     default:
       break;
   }
@@ -1181,6 +1354,62 @@ function versionMeta(store, platform) {
 function currentContent(store, platform) {
   const p = store[platform];
   return (p.current >= 0 && p.versions[p.current]) ? p.versions[p.current].content : null;
+}
+
+// ─── PPT 改写版本管理 ─────────────────────────────────────────
+// 结构与 socialStore 完全一致，key 是 backend 名（slidev/marp/pandoc）
+// 存储文件：<base>_ppt.json
+
+function pptStorePath(mdPath) {
+  const base = path.basename(mdPath, path.extname(mdPath));
+  return path.join(path.dirname(mdPath), `${base}_ppt.json`);
+}
+
+const PPT_BACKENDS = ['slidev', 'marp', 'pandoc'];
+
+function loadPptStore(mdPath) {
+  let raw = {};
+  try {
+    const p = pptStorePath(mdPath);
+    if (fs.existsSync(p)) raw = JSON.parse(fs.readFileSync(p, 'utf8')) || {};
+  } catch (_) { raw = {}; }
+
+  const store = { updatedAt: raw.updatedAt || '' };
+  for (const be of PPT_BACKENDS) {
+    const v = raw[be];
+    if (v && Array.isArray(v.versions)) {
+      store[be] = { current: Math.min(v.current || 0, v.versions.length - 1), versions: v.versions };
+    } else {
+      store[be] = { current: -1, versions: [] };
+    }
+  }
+  return store;
+}
+
+function savePptStore(mdPath, store) {
+  try {
+    store.updatedAt = new Date().toISOString();
+    fs.writeFileSync(pptStorePath(mdPath), JSON.stringify(store, null, 2) + '\n', 'utf8');
+  } catch (e) { log(`保存 PPT 改写版本失败: ${e.message}`); }
+}
+
+function addPptVersion(mdPath, backend, markdown, instruction) {
+  const store = loadPptStore(mdPath);
+  const list = store[backend].versions;
+  const nextId = list.length ? Math.max(...list.map(v => v.id || 0)) + 1 : 1;
+  list.push({ id: nextId, at: new Date().toISOString(), instruction: (instruction || '').slice(0, 80), markdown });
+  store[backend].current = list.length - 1;
+  savePptStore(mdPath, store);
+  return store;
+}
+
+function pptVersionMeta(store, backend) {
+  const b = store[backend];
+  return {
+    current: b.current,
+    total: b.versions.length,
+    list: b.versions.map(v => ({ id: v.id, at: v.at, instruction: v.instruction })),
+  };
 }
 
 /** 本地算法预填（不调用任何模型） */
@@ -1416,6 +1645,245 @@ async function handleUpload(msg, panel, mdPath) {
   }
 }
 
+// ─────────────────────────────────────────────
+//  PPT 导出（双 backend：Slidev 美观截图 / Pandoc 可编辑）
+// ─────────────────────────────────────────────
+
+// 当前 PPT 子进程引用，用于取消
+let currentPptProc = null;
+let currentPptAbort = null; // AbortController for LLM
+
+async function handleExportPpt(msg, panel, mdPath) {
+  const { execFile } = require('child_process');
+  const os   = require('os');
+  const notify = (step, total, label) =>
+    panel.webview.postMessage({ type: 'pptProgress', step, total, label });
+
+  // 杀掉上一次残留
+  if (currentPptProc && !currentPptProc.killed) {
+    currentPptProc.kill('SIGTERM'); currentPptProc = null;
+  }
+  if (currentPptAbort) { currentPptAbort.abort(); currentPptAbort = null; }
+
+  const backend  = msg.backend || 'slidev';  // 'slidev' | 'pandoc'
+  const mdDir    = path.dirname(mdPath);
+  const base     = path.basename(mdPath, path.extname(mdPath));
+  const outFile  = path.join(mdDir, `${base}.pptx`);
+
+  try {
+    // ── 步骤 1：LLM 改写（可选）──────────────────────────────
+    let sourceMdPath = mdPath; // 默认直接用原文件
+    if (msg.llmEnabled && msg.llmMd) {
+      // webview 已经生成了 Slidev MD 并回传给我们
+      const tmpMd = path.join(os.tmpdir(), `m2a_ppt_llm_${Date.now()}.md`);
+      fs.writeFileSync(tmpMd, msg.llmMd, 'utf8');
+      sourceMdPath = tmpMd;
+    }
+
+    if (backend === 'slidev') {
+      // ── Slidev backend ─────────────────────────────────────
+      const totalSteps = msg.llmEnabled ? 7 : 5;
+      notify(msg.llmEnabled ? 3 : 1, totalSteps, '检查 Slidev 安装...');
+
+      const globalStorage = extContext.globalStorageUri.fsPath;
+      const slidevDir = slidevManager.getSlidevDir(globalStorage);
+      const slidevBin = await slidevManager.getSlidevBin(
+        globalStorage,
+        (s, t, l) => notify(s, t, l),
+      );
+
+      notify(msg.llmEnabled ? 5 : 3, totalSteps, '正在渲染幻灯片...');
+
+      // 构造带 frontmatter 的临时 Slidev 文件
+      // 放在 Slidev 安装目录里，这样相对路径图片也能找到
+      // （图片路径会在 slidev 里解析，需要保持相对关系）
+      const theme      = msg.theme || 'default';
+      const rawContent = fs.readFileSync(sourceMdPath, 'utf8');
+      // 如果 LLM 已经生成了带 frontmatter 的内容，替换 theme；否则插入
+      let slidevContent;
+      if (/^---\s*\n/.test(rawContent)) {
+        // 有 frontmatter：确保 theme 字段存在
+        if (/\ntheme\s*:/.test(rawContent)) {
+          slidevContent = rawContent.replace(/(\ntheme\s*:\s*)([^\n]*)/, `$1${theme}`);
+        } else {
+          slidevContent = rawContent.replace(/^(---\s*\n)/, `$1theme: ${theme}\n`);
+        }
+      } else {
+        slidevContent = `---\ntheme: ${theme}\n---\n\n${rawContent}`;
+      }
+
+      // 临时文件放在 md 文件同目录，保持图片相对路径正确
+      const tmpSlidev = path.join(mdDir, `.m2a_slidev_tmp_${Date.now()}.md`);
+      fs.writeFileSync(tmpSlidev, slidevContent, 'utf8');
+
+      // 用 AbortController 支持取消
+      const abortCtrl = new AbortController();
+      currentPptAbort = abortCtrl;
+
+      await slidevManager.exportSlides({
+        slidevBin,
+        slidesPath: tmpSlidev,
+        outFile,
+        format: 'pptx',
+        signal: abortCtrl.signal,
+        slidevDir,
+        onProgress: (s, t, l) => notify(msg.llmEnabled ? 5 + s : 3 + s, totalSteps, l),
+      });
+
+      try { fs.unlinkSync(tmpSlidev); } catch (_) {}
+
+    } else if (backend === 'marp') {
+      // ── Marp backend ───────────────────────────────────────
+      const { spawn } = require('child_process');
+      const marpTheme = msg.marpTheme || 'default';
+      const rawContent = fs.readFileSync(sourceMdPath, 'utf8');
+      // 注入 Marp frontmatter
+      let marpContent;
+      if (/^---\n/.test(rawContent)) {
+        marpContent = rawContent.replace(/^---\n/, `---\nmarp: true\ntheme: ${marpTheme}\npaginate: true\n`);
+      } else {
+        marpContent = `---\nmarp: true\ntheme: ${marpTheme}\npaginate: true\n---\n\n${rawContent}`;
+      }
+      const tmpMarp = path.join(os.tmpdir(), `m2a_marp_${Date.now()}.md`);
+      fs.writeFileSync(tmpMarp, marpContent, 'utf8');
+
+      notify(2, 4, '正在渲染（Marp npx）...');
+      await new Promise((resolve, reject) => {
+        const proc = spawn('npx', [
+          '--yes', '@marp-team/marp-cli',
+          tmpMarp, '--pptx', '--no-stdin', '--allow-local-files',
+          '-o', outFile,
+        ], { shell: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        currentPptProc = proc;
+        let buf = '';
+        const onData = (d) => {
+          buf += d.toString();
+          const lines = buf.split('\n'); buf = lines.pop();
+          for (const l of lines) {
+            const t = l.trim().replace(/^\[\s*INFO\s*\]\s*/i, '');
+            if (t && !/stdin stream/i.test(t)) notify(3, 4, t.slice(0, 80));
+          }
+        };
+        proc.stdout.on('data', onData); proc.stderr.on('data', onData);
+        proc.on('close', (code) => {
+          currentPptProc = null;
+          try { fs.unlinkSync(tmpMarp); } catch (_) {}
+          if (code !== 0 && code !== null) reject(new Error(`Marp 退出码 ${code}`));
+          else resolve();
+        });
+        proc.on('error', reject);
+      });
+
+    } else {
+      // ── Pandoc backend ─────────────────────────────────────
+      notify(1, 5, '检查 pandoc...');
+      const pandocPath = await pandocManager.getPandocPath(
+        extContext.globalStorageUri.fsPath,
+        notify,
+      );
+
+      notify(3, 5, '正在生成可编辑 PPTX...');
+      const themesDir = path.join(extContext.extensionUri.fsPath, 'ppt-themes');
+      const themeFile = msg.pandocTheme ? path.join(themesDir, `${msg.pandocTheme}.pptx`) : null;
+      const slideLevel = msg.split === 'h2' ? '2' : '1';
+
+      const args = [
+        sourceMdPath, '-o', outFile,
+        '--slide-level', slideLevel,
+        `--resource-path=${mdDir}`,
+        '--embed-resources',
+      ];
+      if (themeFile && fs.existsSync(themeFile)) args.push(`--reference-doc=${themeFile}`);
+
+      await new Promise((resolve, reject) => {
+        const proc = execFile(pandocPath, args, { cwd: mdDir }, (err, _out, stderr) => {
+          currentPptProc = null;
+          if (err && err.code !== 0) reject(new Error((stderr || err.message).slice(0, 400)));
+          else resolve();
+        });
+        currentPptProc = proc;
+      });
+    }
+
+    // 清理 LLM 临时文件
+    if (msg.llmEnabled && msg.llmMd && sourceMdPath !== mdPath) {
+      try { fs.unlinkSync(sourceMdPath); } catch (_) {}
+    }
+
+    notify(99, 100, '生成完成！');
+    log(`PPT 导出成功: ${outFile}`);
+    panel.webview.postMessage({ type: 'pptResult', success: true, filename: path.basename(outFile) });
+    const action = await vscode.window.showInformationMessage(
+      `✅ PPTX 已生成：${outFile}`, '打开文件', '打开目录',
+    );
+    if (action === '打开文件') vscode.commands.executeCommand('vscode.open', vscode.Uri.file(outFile));
+    else if (action === '打开目录') vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(outFile));
+  } catch (err) {
+    log(`PPT 导出失败: ${err.message}`);
+    panel.webview.postMessage({ type: 'pptResult', success: false, error: err.message });
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Word 导出（pandoc）
+// ─────────────────────────────────────────────
+
+async function handleExportWord(msg, panel, mdPath) {
+  const { execFile } = require('child_process');
+  const notify = (m) => panel.webview.postMessage({ type: 'wordProgress', message: m });
+
+  try {
+    // 用 pandoc-manager 统一查找/下载 pandoc
+    notify('⏳ 检测 pandoc...');
+    const pandocPath = await pandocManager.getPandocPath(
+      extContext.globalStorageUri.fsPath,
+      (step, total, label) => notify(`⏳ [${step}/${total}] ${label}`),
+    );
+
+    const base    = path.basename(mdPath, path.extname(mdPath));
+    const outFile = path.join(path.dirname(mdPath), `${base}.docx`);
+
+    notify('⏳ 正在生成 Word...');
+
+    // 构建 pandoc 参数
+    const mathFlag = msg.mathFmt === 'mathml' ? '--mathml'
+      : msg.mathFmt === 'latex' ? '--lua-filter=/dev/null'
+      : ''; // docx 默认走 OMML
+    const hlFlag = msg.hlStyle && msg.hlStyle !== 'none'
+      ? `--highlight-style=${msg.hlStyle}`
+      : '--no-highlight';
+
+    const mdDir = path.dirname(mdPath);
+    const args = [
+      mdPath,
+      '-o', outFile,
+      '--wrap=none',
+      `--resource-path=${mdDir}`,
+      '--embed-resources',
+      hlFlag,
+    ];
+    if (mathFlag) args.push(mathFlag);
+
+    await new Promise((resolve, reject) => {
+      execFile(pandocPath, args, { cwd: mdDir }, (err, stdout, stderr) => {
+        if (err) reject(new Error(stderr || err.message));
+        else resolve();
+      });
+    });
+
+    log(`Word 导出成功: ${outFile}`);
+    panel.webview.postMessage({ type: 'wordResult', success: true, filename: path.basename(outFile) });
+    const action = await vscode.window.showInformationMessage(
+      `✅ Word 已生成：${outFile}`, '打开文件', '打开目录',
+    );
+    if (action === '打开文件') vscode.commands.executeCommand('vscode.open', vscode.Uri.file(outFile));
+    else if (action === '打开目录') vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(outFile));
+  } catch (err) {
+    log(`Word 导出失败: ${err.message}`);
+    panel.webview.postMessage({ type: 'wordResult', success: false, error: err.message });
+  }
+}
+
 /**
  * POST to FastPen API to upload article to WeChat draft box.
  * @param {{ markdown, title, appid, appSecret, author, digest }} params
@@ -1516,59 +1984,42 @@ function socialBlockHtml(platform, prefix, name, titleLimit, extraHint) {
 
   return `
         <div class="social-block" data-platform="${platform}" data-prefix="${prefix}" data-title-limit="${titleLimit}">
+          <!-- 登录状态行 -->
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
             <span class="social-status" id="${prefix}-status" title="Cookie 登录状态与有效期">● 未登录</span>
             <button class="btn btn-secondary" id="${prefix}-login" style="padding:4px 10px;">登录${name}</button>
             <button class="btn btn-secondary" id="${prefix}-logout" style="padding:4px 8px;display:none;">退出</button>
           </div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-            <a href="#" id="${prefix}-openlogin" style="font-size:12px;color:#4ea1ff;">🔗 打开${name}登录页</a>
-            <a href="#" id="${prefix}-pastetoggle" style="font-size:12px;color:#888;">✍️ 手动粘贴 Cookie</a>
+          <!-- 手动登录折叠区 -->
+          <div style="margin-bottom:4px;">
+            <a href="#" id="${prefix}-pastetoggle" style="font-size:12px;color:#888;">🔑 手动登录 ▾</a>
           </div>
           <p class="hint" id="${prefix}-cookiehint" style="display:none;"></p>
-          <div id="${prefix}-pastebox" style="display:none;">
+          <div id="${prefix}-pastebox" style="display:none;border:1px solid #3a3a3a;border-radius:4px;padding:8px;margin-bottom:6px;">
+            <a href="#" id="${prefix}-openlogin" style="font-size:12px;color:#4ea1ff;display:block;margin-bottom:6px;">🔗 打开${name}登录页</a>
             <textarea id="${prefix}-pasteinput" rows="3" placeholder="粘贴浏览器里的 Cookie（name=value; name2=value2）或 JSON 数组" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;"></textarea>
             <button class="btn btn-secondary" id="${prefix}-pastesave" style="margin-top:4px;padding:4px 10px;">保存 Cookie</button>
           </div>
 
+          <!-- AI/手动切换 -->
           <div style="display:flex;gap:14px;margin:10px 0 6px;">
             <label style="cursor:pointer;"><input type="radio" name="${prefix}-mode" value="ai" checked> ✨ AI 生成</label>
             <label style="cursor:pointer;"><input type="radio" name="${prefix}-mode" value="manual"> ✍️ 手动</label>
           </div>
 
           <div id="${prefix}-ai">
-            <a href="#" id="${prefix}-llmtoggle" style="font-size:12px;color:#4ea1ff;">⚙️ LLM 配置</a>
-            <span id="${prefix}-llmstate" style="font-size:12px;color:#888;margin-left:6px;">未配置</span>
-            <div id="${prefix}-llmbox" style="display:none;border:1px solid #3a3a3a;border-radius:4px;padding:8px;margin:6px 0;">
-              <label>快速预设</label>
-              <select id="${prefix}-llmpreset" style="width:100%;box-sizing:border-box;">
-                <option value="">— 选择预设 —</option>
-                <option value="openrouter">OpenRouter（有免费模型，需注册免费 key）</option>
-                <option value="groq">Groq（免费额度，需注册免费 key）</option>
-                <option value="deepseek">DeepSeek（便宜，中文好）</option>
-                <option value="ollama">本地 Ollama（完全免费，无需 key）</option>
-                <option value="openai">OpenAI</option>
-              </select>
-              <label>接口地址（OpenAI 兼容）</label>
-              <input type="text" id="${prefix}-llmbase" placeholder="https://api.deepseek.com/v1" style="width:100%;box-sizing:border-box;">
-              <label>模型名</label>
-              <input type="text" id="${prefix}-llmmodel" placeholder="deepseek-chat" style="width:100%;box-sizing:border-box;">
-              <label>API Key <span style="color:#3ddc84;">（存入系统钥匙串，不落明文）</span></label>
-              <input type="password" id="${prefix}-llmkey" placeholder="留空则保持不变；本地 Ollama 无需填" style="width:100%;box-sizing:border-box;">
-              <div class="panel-actions" style="margin-top:6px;">
-                <button class="btn btn-xhs" id="${prefix}-llmsave">保存</button>
-                <button class="btn btn-secondary" id="${prefix}-llmtest">测试连接</button>
-                <button class="btn btn-secondary" id="${prefix}-llmclear" title="清除已保存的 Key">清除 Key</button>
-              </div>
-              <div id="${prefix}-llmresult" style="margin-top:6px;font-size:12px;color:#4ea1ff;"></div>
+            <!-- LLM 状态标记 -->
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              <span id="${prefix}-llmstate" style="font-size:12px;color:#ffb020;">⚠️ LLM 未配置</span>
             </div>
-
-            <label>生成指令（可改后重新生成）</label>
-            <textarea id="${prefix}-prompt" rows="5" style="width:100%;box-sizing:border-box;font-family:inherit;"></textarea>
-            <div class="panel-actions" style="margin-top:6px;">
-              <button class="btn btn-xhs" id="${prefix}-gen">✨ 生成文案（LLM）</button>
-              <button class="btn btn-secondary" id="${prefix}-local" title="用本地算法重新提取标题/正文/标签，不调用模型">↺ 本地提取</button>
-              <button class="btn btn-secondary" id="${prefix}-reprompt" title="恢复默认指令">↺ 默认指令</button>
+            <!-- 生成指令（默认折叠） -->
+            <div style="margin-bottom:4px;">
+              <a href="#" id="${prefix}-prompttoggle" style="font-size:12px;color:#888;">展开指令 ▾</a>
+            </div>
+            <textarea id="${prefix}-prompt" rows="5" style="display:none;width:100%;box-sizing:border-box;font-family:inherit;margin-bottom:6px;"></textarea>
+            <div style="display:flex;gap:6px;margin-bottom:6px;">
+              <button class="btn btn-xhs" id="${prefix}-gen" style="flex:1;">✨ AI 生成</button>
+              <button class="btn btn-secondary" id="${prefix}-reprompt" title="恢复默认指令" style="padding:4px 10px;">↺ 重置指令</button>
             </div>
           </div>
 
@@ -1585,10 +2036,9 @@ function socialBlockHtml(platform, prefix, name, titleLimit, extraHint) {
           <label>全文链接</label>
           <input type="text" id="${prefix}-link" placeholder="留空则用 front matter 里的 permalink/url" style="width:100%;box-sizing:border-box;">
 
-          <div class="panel-actions" style="margin-top:12px;">
-            <button class="btn btn-secondary" id="${prefix}-savecopy" title="保存到文章目录下的 _social.json，切换/重开不用重新生成">💾 保存文案</button>
-            <button class="btn btn-secondary" id="${prefix}-copytext">📋 复制文案</button>
-            <button class="btn btn-xhs" id="${prefix}-publish" title="注入 Cookie 打开真实浏览器，自动传图+填文">🚀 发布${name}</button>
+          <!-- 主操作按钮 -->
+          <div style="margin-top:12px;">
+            <button class="btn btn-xhs" id="${prefix}-publish" style="width:100%;padding:10px;font-size:14px;" title="注入 Cookie 打开真实浏览器，自动传图+填文">🚀 发布${name}</button>
           </div>
           <p class="hint" style="margin-top:6px;">${extraHint}</p>
 
@@ -1603,7 +2053,19 @@ function socialBlockHtml(platform, prefix, name, titleLimit, extraHint) {
           </div>
           <div class="panel-actions" style="margin-top:6px;">
             <button class="btn btn-secondary" id="${prefix}-resume" style="display:none;">▶️ 从断点继续</button>
-            <button class="btn btn-secondary" id="${prefix}-closebrowser" title="关掉这个平台的浏览器窗口">🗙 关闭浏览器</button>
+          </div>
+
+          <!-- 更多操作（折叠） -->
+          <div style="margin-top:8px;">
+            <a href="#" id="${prefix}-moretoggle" style="font-size:12px;color:#888;">更多 ▾</a>
+          </div>
+          <div id="${prefix}-morebox" style="display:none;margin-top:6px;">
+            <div class="panel-actions">
+              <button class="btn btn-secondary" id="${prefix}-local" title="用本地算法重新提取标题/正文/标签，不调用模型">↺ 本地提取</button>
+              <button class="btn btn-secondary" id="${prefix}-savecopy" title="保存到文章目录下的 _social.json，切换/重开不用重新生成">💾 保存文案</button>
+              <button class="btn btn-secondary" id="${prefix}-copytext">📋 复制文案</button>
+              <button class="btn btn-secondary" id="${prefix}-closebrowser" title="关掉这个平台的浏览器窗口">🗙 关闭浏览器</button>
+            </div>
           </div>
 
           <div class="social-progress" id="${prefix}-progress" style="margin-top:8px;color:#4ea1ff;font-size:12px;white-space:pre-wrap;"></div>
@@ -1677,21 +2139,33 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     /* ── 工具栏 ── */
     .toolbar {
       display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 16px;
+      flex-direction: column;
       background: #2c2c2c;
       border-bottom: 1px solid #444;
       flex-shrink: 0;
-      flex-wrap: wrap;
+      /* overflow 必须 visible，否则 position:absolute 的下拉菜单会被裁掉 */
+      overflow: visible;
+    }
+    /* 第一行：标题 */
+    .toolbar-title-row {
+      padding: 6px 14px 0;
     }
     .toolbar-title {
-      flex: 1;
-      font-size: 13px;
-      color: #ccc;
+      font-size: 12px;
+      color: #888;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      display: block;
+    }
+    /* 第二行：所有操作按钮，overflow:visible 确保下拉可显示 */
+    .toolbar-btn-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px 7px;
+      flex-wrap: nowrap;
+      overflow: visible;
     }
     .btn {
       padding: 5px 14px;
@@ -1725,6 +2199,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     .btn-xhs:hover       { background: #d91c38; }
     .btn-xhs-copy  { background: #ff6080; color: #fff; }
     .btn-xhs-copy:hover  { background: #e04060; }
+    .btn-twitter   { background: #1d9bf0; color: #fff; }
+    .btn-twitter:hover   { background: #1a8cd8; }
     .btn:disabled  { opacity: 0.5; cursor: not-allowed; }
 
     /* ── 主区域 ── */
@@ -1737,15 +2213,23 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     /* ── 预览区域 ── */
     .preview-scroll {
       flex: 1;
-      overflow-y: auto;
+      overflow: auto;
       padding: 0;
-      display: flex;
-      justify-content: center;
       background: #fff;
+      /* 不用 flex 布局，zoom-canvas 用 margin:0 auto 居中，
+         这样 CSS zoom 放大后 scrollHeight 真实增长，scrollTop 补偿才有效 */
+    }
+    /* zoom-canvas：直接撑开 scroll 容器，margin auto 水平居中 */
+    .zoom-canvas {
+      /* 宽度自适应容器，zoom 放大后 scrollWidth 自然增长 */
+      width: 100%;
+      max-width: 680px;
+      margin: 0 auto;
+      /* zoom 由 JS 动态设置，默认 1 */
+      box-sizing: border-box;
     }
     .article-wrapper {
       width: 100%;
-      max-width: 680px;
       background: transparent;
       padding: 32px 28px;
       min-height: 200px;
@@ -2135,56 +2619,231 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     }
     .btn-toc { background: #444; color: #eee; }
     .btn-toc:hover { background: #555; }
+    .btn-ppt  { background: #7c3aed; color: #fff; }
+    .btn-ppt:hover  { background: #6d28d9; }
+    .btn-word { background: #1d4ed8; color: #fff; }
+    .btn-word:hover { background: #1e40af; }
+
+    /* ── 下拉菜单（平台聚合按钮） ── */
+    .dropdown { position: relative; display: inline-flex; flex-shrink: 0; }
+    .dropdown-menu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      background: #2a2a2a;
+      border: 1px solid #555;
+      border-radius: 6px;
+      min-width: 200px;
+      z-index: 9000;
+      box-shadow: 0 6px 20px rgba(0,0,0,.5);
+      overflow: hidden;
+    }
+    .dropdown-menu.open { display: block; }
+    /* 右对齐版（靠右侧按钮） */
+    .dropdown-menu.align-right { left: auto; right: 0; }
+    .dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 14px;
+      font-size: 13px;
+      color: #ddd;
+      cursor: pointer;
+      white-space: nowrap;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+      transition: background 0.12s;
+    }
+    .dropdown-item:hover { background: #3a3a3a; color: #fff; }
+    .dropdown-item .item-icon { font-size: 15px; flex-shrink: 0; }
+    .dropdown-item .item-label { font-weight: 500; }
+    .dropdown-item .item-desc {
+      font-size: 11px; color: #888; margin-top: 2px;
+      white-space: normal; line-height: 1.3;
+    }
+    .dropdown-item-content { display: flex; flex-direction: column; }
+    .dropdown-divider { height: 1px; background: #3a3a3a; margin: 4px 0; }
+    .dropdown-section-label {
+      padding: 6px 14px 3px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #666;
+      pointer-events: none;
+    }
+    /* 触发按钮带小三角 */
+    .dropdown-trigger::after {
+      content: '▾';
+      margin-left: 4px;
+      font-size: 10px;
+      opacity: 0.7;
+    }
+    /* 工具栏分隔线 */
+    .toolbar-sep {
+      width: 1px;
+      height: 20px;
+      background: #444;
+      flex-shrink: 0;
+      margin: 0 2px;
+    }
   </style>
 </head>
 <body>
 
   <!-- 工具栏 -->
   <div class="toolbar">
-    <span class="toolbar-title" id="doc-title">Markdown2Anything 预览</span>
+    <!-- 第一行：文档标题 -->
+    <div class="toolbar-title-row">
+      <span class="toolbar-title" id="doc-title">Markdown2Anything 预览</span>
+    </div>
+
+    <!-- 第二行：所有按钮 -->
+    <div class="toolbar-btn-row">
+
+    <!-- 主题选择 -->
     <select id="theme-select" title="切换主题" style="
       padding:5px 8px; border:none; border-radius:4px; cursor:pointer;
-      font-size:13px; background:#3a3a3a; color:#eee; outline:none;
+      font-size:13px; background:#3a3a3a; color:#eee; outline:none; flex-shrink:0;
     ">
       <option value="">主题...</option>
     </select>
-    <button class="btn btn-toc" id="btn-toc" title="显示/隐藏文章目录（仅预览用，不影响导出）">
-      📑 目录
-    </button>
+
+    <!-- 目录 -->
+    <button class="btn btn-toc" id="btn-toc" title="显示/隐藏文章目录">📑 目录</button>
+
+    <!-- 缩放 -->
     <div class="zoom-controls">
-      <button class="btn btn-secondary" id="btn-zoom-out" title="缩小预览">－</button>
+      <button class="btn btn-secondary" id="btn-zoom-out" title="缩小（Ctrl+滚轮）">－</button>
       <span id="zoom-value">100%</span>
-      <button class="btn btn-secondary" id="btn-zoom-in" title="放大预览">＋</button>
+      <button class="btn btn-secondary" id="btn-zoom-in" title="放大（Ctrl+滚轮）">＋</button>
       <button class="btn btn-secondary" id="btn-zoom-reset" title="重置缩放" style="padding:4px 7px;">↺</button>
     </div>
-    <button class="btn btn-primary" id="btn-copy" title="选中并复制预览区域内容，可直接粘贴到微信公众号编辑器">
-      📋 复制微信
-    </button>
-    <button class="btn btn-zhihu" id="btn-zhihu" title="复制适合粘贴到知乎编辑器的内容（公式保留 KaTeX HTML）">
-      📝 复制知乎
-    </button>
-    <button class="btn btn-zhihu-publish" id="btn-zhihu-publish" title="直接发布到知乎专栏（需扫码登录）">
-      🚀 发布知乎
-    </button>
-    <button class="btn btn-xhs" id="btn-xhs" title="将文章渲染为多张图片导出，适合发布小红书">
-      📸 导出小红书
-    </button>
-    <button class="btn btn-xhs-copy" id="btn-xhs-copy" title="复制适合粘贴到小红书长文编辑器的内容（文字格式保留；图片需在小红书编辑器内手动上传）">
-      📱 复制小红书
-    </button>
-    <button class="btn btn-xhs" id="btn-twitter" title="生成中文推文并用真实浏览器自动发布到 Twitter/X">
-      🐦 发布 Twitter
-    </button>
-    <button class="btn btn-secondary" id="btn-style" title="打开 CSS 样式编辑器">
-      🎨 修改样式
-    </button>
-    <button class="btn btn-upload" id="btn-upload" title="上传到微信公众号草稿箱">
-      ☁️ 上传公众号
-    </button>
-    <button class="btn btn-secondary" id="btn-export" title="导出 HTML 文件到 build/ 目录">
-      💾 导出 HTML
-    </button>
-  </div>
+
+    <!-- 编辑器同步 -->
+    <button class="btn btn-secondary" id="btn-sync-to-preview" title="跳到编辑器光标对应的预览位置" style="padding:4px 9px;font-size:12px;">→ 预览</button>
+    <button class="btn btn-secondary" id="btn-sync-to-editor" title="跳到当前预览位置对应的编辑器行" style="padding:4px 9px;font-size:12px;">← 编辑</button>
+
+    <div class="toolbar-sep"></div>
+
+    <!-- 🟢 微信 ▼ -->
+    <div class="dropdown" id="dd-wechat">
+      <button class="btn btn-primary dropdown-trigger" id="btn-dd-wechat">🟢 微信</button>
+      <div class="dropdown-menu" id="menu-wechat">
+        <div class="dropdown-section-label">操作方式</div>
+        <button class="dropdown-item" id="btn-copy">
+          <span class="item-icon">📋</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">复制到剪贴板</span>
+            <span class="item-desc">带样式 HTML，直接粘贴到公众号编辑器</span>
+          </span>
+        </button>
+        <button class="dropdown-item" id="btn-upload">
+          <span class="item-icon">☁️</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">上传到草稿箱</span>
+            <span class="item-desc">通过 API 直接推送到公众号草稿（需配置 AppID）</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 🔵 知乎 ▼ -->
+    <div class="dropdown" id="dd-zhihu">
+      <button class="btn btn-zhihu dropdown-trigger" id="btn-dd-zhihu">🔵 知乎</button>
+      <div class="dropdown-menu" id="menu-zhihu">
+        <div class="dropdown-section-label">操作方式</div>
+        <button class="dropdown-item" id="btn-zhihu">
+          <span class="item-icon">📋</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">复制到剪贴板</span>
+            <span class="item-desc">带样式 HTML，手动粘贴到知乎编辑器</span>
+          </span>
+        </button>
+        <button class="dropdown-item" id="btn-zhihu-publish">
+          <span class="item-icon">🚀</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">自动发布</span>
+            <span class="item-desc">打开浏览器，自动填充标题和正文（需登录）</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 📱 小红书 ▼ -->
+    <div class="dropdown" id="dd-xhs">
+      <button class="btn btn-xhs dropdown-trigger" id="btn-dd-xhs">📱 小红书</button>
+      <div class="dropdown-menu" id="menu-xhs">
+        <div class="dropdown-section-label">图文笔记（推荐）</div>
+        <button class="dropdown-item" id="btn-xhs">
+          <span class="item-icon">📸</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">截图为长图</span>
+            <span class="item-desc">渲染为多张图片，适合图文笔记发布</span>
+          </span>
+        </button>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-section-label">长文笔记</div>
+        <button class="dropdown-item" id="btn-xhs-copy">
+          <span class="item-icon">📋</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">复制到剪贴板</span>
+            <span class="item-desc">纯文字格式，粘贴到小红书长文编辑器</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 🐦 Twitter -->
+    <button class="btn btn-twitter" id="btn-twitter" title="生成中文推文，用真实浏览器自动发布到 Twitter/X">🐦 Twitter</button>
+
+    <div class="toolbar-sep"></div>
+
+    <!-- 💾 导出 ▼ -->
+    <div class="dropdown" id="dd-export">
+      <button class="btn btn-secondary dropdown-trigger" id="btn-dd-export">💾 导出</button>
+      <div class="dropdown-menu align-right" id="menu-export">
+        <div class="dropdown-section-label">导出格式</div>
+        <button class="dropdown-item" id="btn-export">
+          <span class="item-icon">🌐</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">HTML</span>
+            <span class="item-desc">默认保存到 MD 同目录同名 .html</span>
+          </span>
+        </button>
+        <div style="padding:4px 14px 8px;display:flex;gap:6px;align-items:center;">
+          <input type="text" id="html-output-path" placeholder="自定义路径（留空=同目录）"
+            style="flex:1;padding:4px 8px;background:#222;border:1px solid #444;border-radius:3px;color:#ccc;font-size:11px;outline:none;"
+            title="绝对路径或相对于 md 文件的路径，如 ../out/article.html">
+        </div>
+        <div class="dropdown-divider"></div>
+        <button class="dropdown-item" id="btn-ppt">
+          <span class="item-icon">📊</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">PPT（PPTX）</span>
+            <span class="item-desc">pandoc 生成，文字可编辑，图片/公式完整</span>
+          </span>
+        </button>
+        <button class="dropdown-item" id="btn-word">
+          <span class="item-icon">📄</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">Word（DOCX）</span>
+            <span class="item-desc">保留公式/代码/图片，需安装 pandoc</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ⚙️ LLM 配置 -->
+    <button class="btn btn-secondary" id="btn-llm-config" title="配置 LLM 接口（AI 生成文案/PPT 改写共用）">⚙️ LLM</button>
+
+    <!-- 🎨 样式 -->
+    <button class="btn btn-secondary" id="btn-style" title="自定义 CSS 样式">🎨 样式</button>
+
+    </div><!-- /toolbar-btn-row -->
+  </div><!-- /toolbar -->
 
   <!-- 主内容区 -->
   <div class="main">
@@ -2197,9 +2856,11 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     </div>
 
     <!-- 预览区 -->
-    <div class="preview-scroll">
-      <div class="article-wrapper" id="preview-content">
-        <p style="color:#999;text-align:center;">正在加载预览...</p>
+    <div class="preview-scroll" id="preview-scroll">
+      <div class="zoom-canvas" id="zoom-canvas">
+        <div class="article-wrapper" id="preview-content">
+          <p style="color:#999;text-align:center;">正在加载预览...</p>
+        </div>
       </div>
     </div>
 
@@ -2207,11 +2868,74 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     <div class="side-panel" id="style-panel">
       <div class="side-panel-header">🎨 自定义样式<button class="panel-close-btn" data-close-panel="style-panel" data-close-state="stylePanelOpen">×</button></div>
       <div class="side-panel-body">
-        <p class="hint">在此输入 CSS，将作用于预览区域内的文章内容。<br>样式在当前会话内保持，不会影响导出文件。</p>
-        <label>自定义 CSS</label>
-        <textarea id="css-textarea" placeholder="/* 在这里输入自定义 CSS */
-.article-wrapper h1 { color: red; }
-.article-wrapper p { font-size: 18px; }
+
+        <p class="hint" style="color:#aaa;line-height:1.6;">
+          在此输入 CSS，覆盖当前主题的样式。<br>
+          所有规则需以 <code style="color:#4fc3f7;">.article-wrapper</code> 开头才能生效。
+        </p>
+
+        <!-- 接口速查表 -->
+        <div style="background:#111;border:1px solid #333;border-radius:6px;padding:10px 12px;margin:10px 0;font-size:11px;line-height:1.9;color:#aaa;">
+          <div style="color:#ccc;font-weight:600;margin-bottom:6px;font-size:12px;">📐 可用选择器</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper</code> — 文章容器（背景/内边距）</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper h1/h2/h3/h4</code> — 各级标题</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper p</code> — 正文段落</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper strong</code> — 加粗文字</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper a</code> — 链接</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper blockquote</code> — 引用块</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper pre.mac-code</code> — 代码块容器</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper code:not([class])</code> — 行内代码</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper table</code> — 表格</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper table th</code> — 表头</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper table td</code> — 表格单元格</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper ul / ol</code> — 列表</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper img</code> — 图片</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper figure</code> — 图片容器</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper figcaption</code> — 图片说明</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper hr</code> — 分割线</div>
+          <div><code style="color:#4fc3f7;">.math-block / .math-inline</code> — KaTeX 公式</div>
+        </div>
+
+        <!-- 常用属性提示 -->
+        <div style="background:#111;border:1px solid #333;border-radius:6px;padding:10px 12px;margin:8px 0;font-size:11px;line-height:1.9;color:#aaa;">
+          <div style="color:#ccc;font-weight:600;margin-bottom:6px;font-size:12px;">⚡ 常用属性</div>
+          <div><code style="color:#a6e3a1;">color</code> — 文字颜色，如 <code>#333</code> / <code>rgb(50,50,50)</code></div>
+          <div><code style="color:#a6e3a1;">font-size</code> — 字号，如 <code>16px</code> / <code>1.1em</code></div>
+          <div><code style="color:#a6e3a1;">font-family</code> — 字体，如 <code>'PingFang SC', serif</code></div>
+          <div><code style="color:#a6e3a1;">line-height</code> — 行高，如 <code>1.8em</code></div>
+          <div><code style="color:#a6e3a1;">background</code> — 背景色/渐变</div>
+          <div><code style="color:#a6e3a1;">border-left</code> — 左边框，如 <code>4px solid #07c160</code></div>
+          <div><code style="color:#a6e3a1;">border-radius</code> — 圆角，如 <code>8px</code></div>
+          <div><code style="color:#a6e3a1;">padding / margin</code> — 内/外边距</div>
+          <div><code style="color:#a6e3a1;">text-align</code> — 对齐：<code>left/center/right</code></div>
+          <div><code style="color:#a6e3a1;">letter-spacing</code> — 字间距，如 <code>0.05em</code></div>
+        </div>
+
+        <!-- LLM 提示 -->
+        <div style="background:#1a1a2e;border:1px solid #333;border-radius:6px;padding:10px 12px;margin:8px 0;font-size:11px;color:#aaa;line-height:1.6;">
+          <div style="color:#9b8afb;font-weight:600;margin-bottom:4px;font-size:12px;">🤖 用 AI 生成样式</div>
+          <div>把下面的提示发给 Claude / ChatGPT，它会直接给你可用的 CSS：</div>
+          <div style="background:#0d0d1a;border:1px solid #2d2d5e;border-radius:4px;padding:8px;margin-top:6px;color:#c4c4ff;font-size:10.5px;line-height:1.7;user-select:text;">
+            帮我写一段适用于 markdown2anything 插件的自定义样式 CSS。<br>
+            选择器格式固定为 <strong>.article-wrapper 元素名</strong>，例如 .article-wrapper h2。<br>
+            需求：[在这里描述你的需求，例如：「标题用蓝色，h2 左边加绿色竖线，正文字体 17px 宋体，引用块浅黄色背景」]
+          </div>
+        </div>
+
+        <label style="margin-top:12px;">CSS 编辑区</label>
+        <textarea id="css-textarea" placeholder="/* 示例 */
+.article-wrapper h1 {
+  color: #07c160;
+  border-bottom: 2px solid #07c160;
+}
+.article-wrapper p {
+  font-size: 17px;
+  line-height: 1.9em;
+}
+.article-wrapper blockquote {
+  background: #f0fff4;
+  border-left: 4px solid #07c160;
+}
 "></textarea>
         <div class="panel-actions">
           <button class="btn btn-primary" id="btn-apply-css">应用</button>
@@ -2373,6 +3097,195 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           '推文正文会自动拼上标签和全文链接，并压到 280 字以内。默认停在发帖前，核对无误后你点页面里的「发帖」。')}
       </div>
     </div>
+
+    <!-- PPT 导出面板 -->
+    <div class="side-panel xhs-panel" id="ppt-panel">
+      <div class="resize-handle" id="ppt-resize-handle"></div>
+      <div class="side-panel-header">📊 导出 PPT<button class="panel-close-btn" data-close-panel="ppt-panel" data-close-state="pptPanelOpen">×</button></div>
+      <div class="side-panel-body">
+
+        <!-- ── Backend 选择 ── -->
+        <label>渲染引擎</label>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">
+          <label style="margin:0;display:flex;align-items:center;gap:6px;cursor:pointer;color:#ccc;font-size:13px;">
+            <input type="radio" name="ppt-backend" value="slidev" id="ppt-backend-slidev" checked
+              style="accent-color:#7c3aed;"> Slidev <span style="color:#888;font-size:11px;">（美观截图 PPTX，首次安装约 200MB）</span>
+          </label>
+          <label style="margin:0;display:flex;align-items:center;gap:6px;cursor:pointer;color:#ccc;font-size:13px;">
+            <input type="radio" name="ppt-backend" value="marp" id="ppt-backend-marp"
+              style="accent-color:#7c3aed;"> Marp <span style="color:#888;font-size:11px;">（截图 PPTX，轻量，npx 即用）</span>
+          </label>
+          <label style="margin:0;display:flex;align-items:center;gap:6px;cursor:pointer;color:#ccc;font-size:13px;">
+            <input type="radio" name="ppt-backend" value="pandoc" id="ppt-backend-pandoc"
+              style="accent-color:#7c3aed;"> Pandoc <span style="color:#888;font-size:11px;">（可编辑 PPTX，约 30MB）</span>
+          </label>
+        </div>
+
+        <!-- Marp 选项 -->
+        <div id="ppt-marp-opts" style="display:none;">
+          <label>Marp 主题</label>
+          <select id="ppt-marp-theme" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;margin-bottom:8px;">
+            <option value="default">Default（白底简洁）</option>
+            <option value="gaia">Gaia（深色优雅）</option>
+            <option value="uncover">Uncover（左对齐极简）</option>
+          </select>
+          <p class="hint" style="margin:0 0 8px;">Marp 通过 npx 即用，无需安装，首次需下载缓存（约 30MB）。<br>导出为截图 PPTX，视觉效果好，但文字不可编辑。</p>
+        </div>
+
+        <!-- Slidev 选项 -->
+        <div id="ppt-slidev-opts">
+          <label>Slidev 主题</label>
+          <select id="ppt-slidev-theme" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;margin-bottom:8px;">
+            <option value="default">Default（简洁）</option>
+            <option value="seriph">Seriph（深色优雅）</option>
+            <option value="bricks">Bricks（网格活力）</option>
+            <option value="apple-basic">Apple Basic（苹果风）</option>
+            <option value="shibainu">Shibainu（柔和可爱）</option>
+          </select>
+          <p class="hint" style="margin:0 0 8px;">首次使用 Slidev 会在后台安装环境（约 200MB），之后秒启动。<br>导出格式为截图 PPTX，文字不可编辑但视觉效果最佳。</p>
+        </div>
+
+        <!-- Pandoc 选项 -->
+        <div id="ppt-pandoc-opts" style="display:none;">
+          <label>Pandoc 主题</label>
+          <select id="ppt-pandoc-theme" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;margin-bottom:8px;">
+            <option value="">默认（白底简洁）</option>
+            <option value="clean-light">Clean Light（浅色商务）</option>
+            <option value="tech-dark">Tech Dark（深色科技）</option>
+            <option value="warm-claude">Warm Claude（暖色知识）</option>
+          </select>
+          <label>分页级别</label>
+          <select id="ppt-split" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;margin-bottom:8px;">
+            <option value="h1">按一级标题（# 开头）分页</option>
+            <option value="h2">按二级标题（## 开头）分页</option>
+          </select>
+          <p class="hint" style="margin:0 0 8px;">生成真正可编辑的 PPTX，文字/代码/图片可在 PowerPoint 中修改。系统无 pandoc 时自动下载（约 30MB）。</p>
+        </div>
+
+        <div class="divider" style="margin:12px 0;"></div>
+
+        <!-- ── LLM 改写（所有 backend 通用） ── -->
+        <div id="ppt-llm-section">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span style="font-size:13px;color:#ccc;font-weight:600;">✨ AI 改写</span>
+            <label style="margin:0;display:flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;color:#888;">
+              <input type="checkbox" id="ppt-llm-enable" style="accent-color:#7c3aed;"> 启用
+            </label>
+          </div>
+          <p class="hint" style="margin:0 0 8px;">用 LLM 把文章重写为 PPT 格式：提取要点、控制每页字数、保留代码/图片引用。需先点工具栏 ⚙️ LLM 配置。</p>
+          <div id="ppt-llm-opts" style="display:none;">
+            <label style="margin-top:8px;">改写指令（可编辑）</label>
+            <textarea id="ppt-llm-instruction" style="width:100%;min-height:120px;padding:8px;background:#1a1a1a;border:1px solid #444;border-radius:4px;color:#ccc;font-size:11px;font-family:monospace;resize:vertical;outline:none;line-height:1.5;"></textarea>
+            <div style="display:flex;gap:8px;margin-top:8px;">
+              <button class="btn btn-secondary" id="btn-ppt-llm-preview" style="flex:1;font-size:12px;">👁 预览改写结果</button>
+              <button class="btn btn-secondary" id="btn-ppt-llm-reset" style="font-size:12px;padding:4px 10px;">↺ 重置</button>
+            </div>
+            <!-- 改写预览区 + 版本管理 -->
+            <div id="ppt-llm-preview-wrap" style="display:none;margin-top:10px;">
+              <!-- 版本导航栏 -->
+              <div id="ppt-ver-bar" style="display:none;align-items:center;gap:6px;margin-bottom:6px;
+                   border:1px solid #3a3a3a;border-radius:4px;padding:5px 8px;background:#1a1a1a;">
+                <button class="btn btn-secondary" id="btn-ppt-ver-prev" style="padding:2px 8px;" title="上一版">◀</button>
+                <span id="ppt-ver-label" style="flex:1;text-align:center;font-size:11px;color:#aaa;"></span>
+                <button class="btn btn-secondary" id="btn-ppt-ver-next" style="padding:2px 8px;" title="下一版">▶</button>
+                <button class="btn btn-secondary" id="btn-ppt-ver-del" style="padding:2px 6px;color:#ff6b6b;" title="删除当前版本">🗑</button>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                <span id="ppt-llm-preview-label" style="font-size:11px;color:#888;">改写后的 Markdown（可直接编辑）</span>
+                <div style="display:flex;gap:4px;">
+                  <button class="btn btn-secondary" id="btn-ppt-ver-save" style="font-size:11px;padding:2px 7px;" title="保存对当前版本的编辑">💾 保存</button>
+                  <button class="btn btn-secondary" id="btn-ppt-llm-preview-close" style="font-size:11px;padding:2px 7px;">收起</button>
+                </div>
+              </div>
+              <textarea id="ppt-llm-preview-text" style="width:100%;min-height:200px;padding:8px;background:#111;border:1px solid #333;border-radius:4px;color:#ccc;font-size:11px;font-family:monospace;resize:vertical;outline:none;line-height:1.5;"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="divider" style="margin:12px 0;"></div>
+
+        <!-- ── 生成按钮 ── -->
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ppt" id="btn-ppt-export" style="flex:1;">📊 生成 PPTX</button>
+          <button class="btn btn-secondary" id="btn-ppt-cancel" style="display:none;padding:5px 10px;">✕</button>
+        </div>
+        <!-- 进度条 -->
+        <div id="ppt-progress-wrap" style="display:none;margin-top:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span id="ppt-progress-label" style="font-size:12px;color:#ccc;flex:1;"></span>
+            <span id="ppt-progress-step" style="font-size:11px;color:#666;flex-shrink:0;margin-left:8px;"></span>
+          </div>
+          <div style="background:#333;border-radius:3px;height:4px;overflow:hidden;">
+            <div id="ppt-progress-bar" style="height:100%;background:#7c3aed;border-radius:3px;width:0%;transition:width 0.3s ease;"></div>
+          </div>
+        </div>
+        <div class="upload-result" id="ppt-result"></div>
+      </div>
+    </div>
+
+    <!-- Word 导出面板 -->
+    <div class="side-panel" id="word-panel">
+      <div class="side-panel-header">📄 导出 Word<button class="panel-close-btn" data-close-panel="word-panel" data-close-state="wordPanelOpen">×</button></div>
+      <div class="side-panel-body">
+        <p class="hint">将 Markdown 导出为 Word（.docx）格式，保留数学公式、代码高亮、图片。</p>
+        <p class="hint" style="color:#e6a817;border:1px solid #555;padding:8px;border-radius:4px;margin-top:8px;">
+          ⚠️ 需要系统安装 <strong style="color:#ccc;">pandoc</strong>。<br>
+          macOS: <code style="color:#4fc3f7;">brew install pandoc</code><br>
+          Windows: <a href="https://pandoc.org/installing.html" style="color:#4fc3f7;" title="pandoc 安装页">pandoc.org/installing</a>
+        </p>
+
+        <label style="margin-top:14px;">数学公式格式</label>
+        <select id="word-math" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;">
+          <option value="mathml">MathML（Word 2013+ 原生支持，推荐）</option>
+          <option value="docx">OMML（Word 原生公式格式）</option>
+          <option value="latex">LaTeX 原文（可用于 LuaLaTeX 流）</option>
+        </select>
+
+        <label style="margin-top:12px;">代码高亮</label>
+        <select id="word-highlight" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;">
+          <option value="pygments">Pygments（推荐）</option>
+          <option value="tango">Tango</option>
+          <option value="espresso">Espresso</option>
+          <option value="zenburn">Zenburn（暗色）</option>
+          <option value="none">不高亮</option>
+        </select>
+
+        <div style="margin-top:16px;display:flex;gap:8px;">
+          <button class="btn btn-word" id="btn-word-export" style="flex:1;">📄 生成 Word</button>
+        </div>
+        <p class="hint" id="word-progress" style="margin-top:10px;display:none;"></p>
+        <div class="upload-result" id="word-result"></div>
+      </div>
+    </div>
+
+    <!-- LLM 全局配置面板 -->
+    <div class="side-panel" id="llm-config-panel">
+      <div class="side-panel-header">⚙️ LLM 配置<button class="panel-close-btn" data-close-panel="llm-config-panel" data-close-state="llmConfigPanelOpen">×</button></div>
+      <div class="side-panel-body">
+        <p class="hint">配置后，AI 生成文案（小红书/Twitter）和 PPT AI 改写功能均可使用。API Key 安全存入系统钥匙串，不落明文。</p>
+        <label style="margin-top:10px;">快速预设</label>
+        <select id="global-llm-preset" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;">
+          <option value="">— 选择预设 —</option>
+          <option value="deepseek">DeepSeek（便宜，中文好）</option>
+          <option value="openrouter">OpenRouter（有免费模型）</option>
+          <option value="groq">Groq（免费额度）</option>
+          <option value="ollama">本地 Ollama（完全免费）</option>
+          <option value="openai">OpenAI</option>
+        </select>
+        <label style="margin-top:10px;">接口地址（OpenAI 兼容）</label>
+        <input type="text" id="global-llm-base" placeholder="https://api.deepseek.com/v1">
+        <label style="margin-top:8px;">模型名</label>
+        <input type="text" id="global-llm-model" placeholder="deepseek-chat">
+        <label style="margin-top:8px;">API Key <span style="color:#3ddc84;">（存入系统钥匙串）</span></label>
+        <input type="password" id="global-llm-key" placeholder="留空则保持不变；本地 Ollama 无需填">
+        <div class="panel-actions" style="margin-top:12px;">
+          <button class="btn btn-primary" id="global-llm-save">保存</button>
+          <button class="btn btn-secondary" id="global-llm-test">测试连接</button>
+          <button class="btn btn-secondary" id="global-llm-clear" title="清除已保存的 API Key">清除 Key</button>
+        </div>
+        <div id="global-llm-result" style="margin-top:8px;font-size:12px;color:#4fc3f7;"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Toast 提示 -->
@@ -2394,9 +3307,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     let currentTitle = '';
     let currentBodyHtml = '';
     let currentThemeBg = '#ffffff';
-    let currentZoom = 100;
     // 用对象统一管理面板开关状态，避免 let 变量与 window 属性不同步的 bug
-    const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false, twitterPanelOpen: false };
+    const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false, twitterPanelOpen: false, pptPanelOpen: false, wordPanelOpen: false, llmConfigPanelOpen: false };
 
     const XHS_DEFAULTS = { width: 1080, height: 1440, padding: 40, tolerance: 15 };
 
@@ -2688,18 +3600,26 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     }
 
     function updateBtnActive() {
-      document.getElementById('btn-style').className =
-        'btn ' + (panelState.stylePanelOpen ? 'btn-active' : 'btn-secondary');
-      document.getElementById('btn-upload').className =
-        'btn ' + (panelState.uploadPanelOpen ? 'btn-active' : 'btn-upload');
-      document.getElementById('btn-xhs').className =
-        'btn ' + (panelState.xhsPanelOpen ? 'btn-active' : 'btn-xhs');
-      document.getElementById('btn-toc').className =
-        'btn ' + (panelState.tocPanelOpen ? 'btn-active' : 'btn-toc');
-      document.getElementById('btn-zhihu-publish').className =
-        'btn ' + (panelState.zhihuPublishPanelOpen ? 'btn-active' : 'btn-zhihu-publish');
-      const btnTw = document.getElementById('btn-twitter');
-      if (btnTw) btnTw.className = 'btn ' + (panelState.twitterPanelOpen ? 'btn-active' : 'btn-xhs');
+      // 工具栏按钮：仅直接触发面板的按钮需要 active 状态
+      // 下拉菜单触发按钮：微信/知乎/小红书的面板都通过下拉子项打开，
+      // 用对应 dropdown 触发按钮高亮
+      // 只改工具栏上真正的触发按钮，下拉菜单里的 dropdown-item 不在这里管
+      const map = [
+        ['btn-toc',        'btn-toc',       panelState.tocPanelOpen],
+        ['btn-style',      'btn-secondary', panelState.stylePanelOpen],
+        ['btn-llm-config', 'btn-secondary', panelState.llmConfigPanelOpen],
+        ['btn-twitter',    'btn-twitter',   panelState.twitterPanelOpen],
+        ['btn-dd-wechat',  'btn-primary',   panelState.uploadPanelOpen],
+        ['btn-dd-zhihu',   'btn-zhihu',     panelState.zhihuPublishPanelOpen],
+        ['btn-dd-xhs',     'btn-xhs',       panelState.xhsPanelOpen],
+        ['btn-dd-export',  'btn-secondary', panelState.pptPanelOpen || panelState.wordPanelOpen],
+      ];
+      for (const [id, base, active] of map) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        const isTrigger = el.classList.contains('dropdown-trigger');
+        el.className = 'btn ' + (active ? 'btn-active' : base) + (isTrigger ? ' dropdown-trigger' : '');
+      }
     }
 
     // 面板关闭按钮（事件委托）
@@ -2778,20 +3698,70 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       vscode.postMessage({ type: 'setTheme', themeId: e.target.value });
     });
 
+    // ─── 下拉菜单系统 ───────────────────────────────────────────
+    // 统一管理所有下拉菜单的开关，点其他地方自动关闭
+    const dropdownMenus = {
+      wechat:  document.getElementById('menu-wechat'),
+      zhihu:   document.getElementById('menu-zhihu'),
+      xhs:     document.getElementById('menu-xhs'),
+      export:  document.getElementById('menu-export'),
+    };
+
+    function openDropdown(key) {
+      Object.entries(dropdownMenus).forEach(([k, el]) => {
+        if (el) el.classList.toggle('open', k === key);
+      });
+    }
+    function closeAllDropdowns() {
+      Object.values(dropdownMenus).forEach(el => el && el.classList.remove('open'));
+    }
+
+    document.getElementById('btn-dd-wechat').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const already = dropdownMenus.wechat.classList.contains('open');
+      closeAllDropdowns();
+      if (!already) openDropdown('wechat');
+    });
+    document.getElementById('btn-dd-zhihu').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const already = dropdownMenus.zhihu.classList.contains('open');
+      closeAllDropdowns();
+      if (!already) openDropdown('zhihu');
+    });
+    document.getElementById('btn-dd-xhs').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const already = dropdownMenus.xhs.classList.contains('open');
+      closeAllDropdowns();
+      if (!already) openDropdown('xhs');
+    });
+    document.getElementById('btn-dd-export').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const already = dropdownMenus.export.classList.contains('open');
+      closeAllDropdowns();
+      if (!already) openDropdown('export');
+    });
+
+    // 点任意地方关闭所有下拉
+    document.addEventListener('click', () => closeAllDropdowns());
+    // 菜单内点击不关闭（由各 item handler 负责关闭）
+    Object.values(dropdownMenus).forEach(el => {
+      if (el) el.addEventListener('click', e => e.stopPropagation());
+    });
+
+    // ─── 微信 ───
     // 复制内容（向 extension 请求带内联 CSS 的 HTML，再写入剪贴板）
     document.getElementById('btn-copy').addEventListener('click', () => {
+      closeAllDropdowns();
       const btn = document.getElementById('btn-copy');
       btn.disabled = true;
-      btn.textContent = '⏳ 处理中...';
+      const label = btn.querySelector('.item-label');
+      if (label) label.textContent = '⏳ 处理中...';
       vscode.postMessage({ type: 'getWechatHtml' });
     });
 
-    document.getElementById('btn-style').addEventListener('click', () => {
-      togglePanel('style-panel', 'stylePanelOpen',
-        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'}]);
-    });
-
+    // 上传公众号草稿箱
     document.getElementById('btn-upload').addEventListener('click', () => {
+      closeAllDropdowns();
       togglePanel('upload-panel', 'uploadPanelOpen',
         [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'}]);
       if (panelState.uploadPanelOpen) {
@@ -2801,7 +3771,20 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       }
     });
 
+    // ─── 知乎 ───
+    // 知乎复制
+    document.getElementById('btn-zhihu').addEventListener('click', () => {
+      closeAllDropdowns();
+      const btn = document.getElementById('btn-zhihu');
+      btn.disabled = true;
+      const label = btn.querySelector('.item-label');
+      if (label) label.textContent = '⏳ 处理中...';
+      vscode.postMessage({ type: 'getZhihuHtml' });
+    });
+
+    // 知乎自动发布（打开侧面板）
     document.getElementById('btn-zhihu-publish').addEventListener('click', () => {
+      closeAllDropdowns();
       togglePanel('zhihu-publish-panel', 'zhihuPublishPanelOpen',
         [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'}]);
       if (panelState.zhihuPublishPanelOpen) {
@@ -2869,14 +3852,234 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       if (_zhihuQrTimer) { clearInterval(_zhihuQrTimer); _zhihuQrTimer = null; }
     }
 
+    const _allPanels = [
+      {panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},
+      {panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},
+      {panelId:'twitter-panel',stateKey:'twitterPanelOpen'},{panelId:'ppt-panel',stateKey:'pptPanelOpen'},
+      {panelId:'word-panel',stateKey:'wordPanelOpen'},{panelId:'llm-config-panel',stateKey:'llmConfigPanelOpen'}
+    ];
+
+    // ─── 小红书 ───
+    // 截图为长图（打开 xhs 侧面板）
     document.getElementById('btn-xhs').addEventListener('click', () => {
-      togglePanel('xhs-panel', 'xhsPanelOpen',
-        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'twitter-panel',stateKey:'twitterPanelOpen'}]);
+      closeAllDropdowns();
+      togglePanel('xhs-panel', 'xhsPanelOpen', _allPanels.filter(p => p.panelId !== 'xhs-panel'));
     });
 
+    // 小红书长文复制
+    document.getElementById('btn-xhs-copy').addEventListener('click', () => {
+      closeAllDropdowns();
+      const btn = document.getElementById('btn-xhs-copy');
+      btn.disabled = true;
+      const label = btn.querySelector('.item-label');
+      if (label) label.textContent = '⏳ 处理中...';
+      vscode.postMessage({ type: 'getXhsCopyHtml' });
+    });
+
+    // ─── Twitter ───
     document.getElementById('btn-twitter').addEventListener('click', () => {
-      togglePanel('twitter-panel', 'twitterPanelOpen',
-        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'}]);
+      togglePanel('twitter-panel', 'twitterPanelOpen', _allPanels.filter(p => p.panelId !== 'twitter-panel'));
+    });
+
+    // ─── 导出格式 ───
+    document.getElementById('btn-ppt').addEventListener('click', () => {
+      closeAllDropdowns();
+      togglePanel('ppt-panel', 'pptPanelOpen', _allPanels.filter(p => p.panelId !== 'ppt-panel'));
+    });
+    document.getElementById('btn-word').addEventListener('click', () => {
+      closeAllDropdowns();
+      togglePanel('word-panel', 'wordPanelOpen', _allPanels.filter(p => p.panelId !== 'word-panel'));
+    });
+
+    // ─── LLM 全局配置 ───
+    document.getElementById('btn-llm-config').addEventListener('click', () => {
+      const wasOpen = panelState.llmConfigPanelOpen;
+      togglePanel('llm-config-panel', 'llmConfigPanelOpen', _allPanels.filter(p => p.panelId !== 'llm-config-panel'));
+      if (!wasOpen) {
+        vscode.postMessage({ type: 'llmGetConfig' });
+      }
+    });
+    document.getElementById('global-llm-preset').addEventListener('change', (e) => {
+      const p = PRESETS[e.target.value];
+      if (!p) return;
+      const base  = document.getElementById('global-llm-base');
+      const model = document.getElementById('global-llm-model');
+      const result = document.getElementById('global-llm-result');
+      if (base)  base.value  = p.baseUrl;
+      if (model) model.value = p.model;
+      if (result) result.textContent = p.note || '';
+    });
+    document.getElementById('global-llm-save').addEventListener('click', () => {
+      const baseUrl = (document.getElementById('global-llm-base') || {}).value || '';
+      const model   = (document.getElementById('global-llm-model') || {}).value || '';
+      const apiKey  = (document.getElementById('global-llm-key') || {}).value || undefined;
+      vscode.postMessage({ type: 'llmSaveConfig', baseUrl, model, apiKey });
+    });
+    document.getElementById('global-llm-test').addEventListener('click', () => {
+      const result = document.getElementById('global-llm-result');
+      if (result) { result.style.color = '#4ea1ff'; result.textContent = '正在测试连接…'; }
+      vscode.postMessage({ type: 'llmTestConnection' });
+    });
+    document.getElementById('global-llm-clear').addEventListener('click', () => {
+      vscode.postMessage({ type: 'llmSaveConfig', apiKey: '' });
+    });
+
+    // ─── PPT 导出 ───
+
+    function setPptProgress(step, total, label) {
+      const wrap = document.getElementById('ppt-progress-wrap');
+      const lbl  = document.getElementById('ppt-progress-label');
+      const stp  = document.getElementById('ppt-progress-step');
+      const bar  = document.getElementById('ppt-progress-bar');
+      if (!wrap) return;
+      wrap.style.display = 'block';
+      if (lbl) lbl.textContent = label || '';
+      if (stp) stp.textContent = step + (total ? '/' + total : '');
+      if (bar) bar.style.width = total ? Math.min(100, Math.round((step / total) * 100)) + '%' : '50%';
+    }
+
+    // 当前选中的 ppt backend
+    function getPptBackend() {
+      const el = document.querySelector('input[name="ppt-backend"]:checked');
+      return el ? el.value : 'slidev';
+    }
+
+    // Backend 切换：显示/隐藏对应选项，自动刷新 LLM 指令
+    document.querySelectorAll('input[name="ppt-backend"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        const backend = getPptBackend();
+        document.getElementById('ppt-slidev-opts').style.display = backend === 'slidev' ? '' : 'none';
+        document.getElementById('ppt-marp-opts').style.display   = backend === 'marp'   ? '' : 'none';
+        document.getElementById('ppt-pandoc-opts').style.display = backend === 'pandoc' ? '' : 'none';
+        // 预览 label 更新
+        const lbl = document.getElementById('ppt-llm-preview-label');
+        if (lbl) lbl.textContent = \`改写后的 \${backend === 'pandoc' ? 'Pandoc' : backend === 'marp' ? 'Marp' : 'Slidev'} Markdown（可直接编辑）\`;
+        // 已启用 LLM 且指令未手动改过时，自动切换到新 backend 对应的默认指令
+        if (document.getElementById('ppt-llm-enable').checked) {
+          vscode.postMessage({ type: 'getPptLlmInstruction', backend });
+        }
+      });
+    });
+
+    // LLM 开关
+    document.getElementById('ppt-llm-enable').addEventListener('change', (e) => {
+      document.getElementById('ppt-llm-opts').style.display = e.target.checked ? '' : 'none';
+      if (e.target.checked) {
+        const ta = document.getElementById('ppt-llm-instruction');
+        if (!ta.value) vscode.postMessage({ type: 'getPptLlmInstruction', backend: getPptBackend() });
+        // 同时加载该 backend 的版本历史
+        vscode.postMessage({ type: 'pptGetVersions', backend: getPptBackend() });
+      }
+    });
+
+    // 重置指令：根据当前选中 backend 重置为对应默认 prompt
+    document.getElementById('btn-ppt-llm-reset').addEventListener('click', () => {
+      vscode.postMessage({ type: 'getPptLlmInstruction', backend: getPptBackend() });
+    });
+
+    // 预览改写结果
+    document.getElementById('btn-ppt-llm-preview').addEventListener('click', () => {
+      const instruction = document.getElementById('ppt-llm-instruction').value;
+      const btn = document.getElementById('btn-ppt-llm-preview');
+      btn.disabled = true; btn.textContent = '⏳ 改写中...';
+      setPptProgress(1, 3, '正在调用 LLM 改写...');
+      document.getElementById('ppt-result').style.display = 'none';
+      vscode.postMessage({ type: 'pptLlmGenerate', instruction, backend: getPptBackend() });
+    });
+
+    document.getElementById('btn-ppt-llm-preview-close').addEventListener('click', () => {
+      document.getElementById('ppt-llm-preview-wrap').style.display = 'none';
+    });
+
+    // ─── PPT 版本管理 ───────────────────────────────────────
+    let _pptVerState = { current: -1, total: 0, list: [] };
+
+    function updatePptVerBar(versions) {
+      if (!versions) return;
+      _pptVerState = versions;
+      const bar   = document.getElementById('ppt-ver-bar');
+      const label = document.getElementById('ppt-ver-label');
+      if (!bar) return;
+      if (versions.total <= 0) { bar.style.display = 'none'; return; }
+      bar.style.display = 'flex';
+      const v = versions.list[versions.current];
+      const dt = v ? new Date(v.at).toLocaleString('zh-CN', { month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+      const src = v ? v.instruction.slice(0, 20) || '(无指令)' : '';
+      label.textContent = \`版本 \${versions.current + 1}/\${versions.total}  \${dt}  \${src}…\`;
+      document.getElementById('btn-ppt-ver-prev').disabled = versions.current <= 0;
+      document.getElementById('btn-ppt-ver-next').disabled = versions.current >= versions.total - 1;
+    }
+
+    // 保存当前编辑内容到当前版本
+    document.getElementById('btn-ppt-ver-save').addEventListener('click', () => {
+      const markdown = document.getElementById('ppt-llm-preview-text').value;
+      vscode.postMessage({ type: 'pptSaveVersion', backend: getPptBackend(), markdown });
+    });
+
+    // 切换版本 ◀ ▶
+    document.getElementById('btn-ppt-ver-prev').addEventListener('click', () => {
+      if (_pptVerState.current > 0)
+        vscode.postMessage({ type: 'pptSwitchVersion', backend: getPptBackend(), index: _pptVerState.current - 1 });
+    });
+    document.getElementById('btn-ppt-ver-next').addEventListener('click', () => {
+      if (_pptVerState.current < _pptVerState.total - 1)
+        vscode.postMessage({ type: 'pptSwitchVersion', backend: getPptBackend(), index: _pptVerState.current + 1 });
+    });
+
+    // 删除当前版本
+    document.getElementById('btn-ppt-ver-del').addEventListener('click', () => {
+      if (!_pptVerState.total) return;
+      if (!confirm(\`确认删除版本 \${_pptVerState.current + 1}？\`)) return;
+      vscode.postMessage({ type: 'pptDeleteVersion', backend: getPptBackend(), index: _pptVerState.current });
+    });
+
+    // backend 切换时拉取该 backend 的版本历史（追加到已有 change listener 上）
+    document.querySelectorAll('input[name="ppt-backend"]').forEach(r => {
+      r.addEventListener('change', () => {
+        if (document.getElementById('ppt-llm-enable').checked) {
+          vscode.postMessage({ type: 'pptGetVersions', backend: getPptBackend() });
+        }
+      });
+    });
+
+    // 生成按钮
+    document.getElementById('btn-ppt-export').addEventListener('click', () => {
+      const backend    = getPptBackend();
+      const theme      = document.getElementById('ppt-slidev-theme').value;
+      const marpTheme  = document.getElementById('ppt-marp-theme').value;
+      const pandocTheme= document.getElementById('ppt-pandoc-theme').value;
+      const split      = document.getElementById('ppt-split').value;
+      const llmEnabled = document.getElementById('ppt-llm-enable').checked;
+      const llmMd      = llmEnabled ? (document.getElementById('ppt-llm-preview-text').value || '') : '';
+
+      const btn    = document.getElementById('btn-ppt-export');
+      const cancel = document.getElementById('btn-ppt-cancel');
+      const result = document.getElementById('ppt-result');
+      btn.disabled = true; btn.textContent = '⏳ 生成中...';
+      if (cancel) cancel.style.display = '';
+      result.style.display = 'none';
+      setPptProgress(1, 5, '准备中...');
+
+      vscode.postMessage({ type: 'exportPpt', backend, theme, marpTheme, pandocTheme, split, llmEnabled, llmMd });
+    });
+
+    document.getElementById('btn-ppt-cancel').addEventListener('click', () => {
+      vscode.postMessage({ type: 'cancelPpt' });
+      const cancel = document.getElementById('btn-ppt-cancel');
+      if (cancel) cancel.style.display = 'none';
+    });
+
+    // ─── Word 导出 ───
+    document.getElementById('btn-word-export').addEventListener('click', () => {
+      const mathFmt = document.getElementById('word-math').value;
+      const hlStyle = document.getElementById('word-highlight').value;
+      const btn    = document.getElementById('btn-word-export');
+      const prog   = document.getElementById('word-progress');
+      const result = document.getElementById('word-result');
+      btn.disabled = true; btn.textContent = '⏳ 生成中...';
+      prog.style.display = 'block'; prog.textContent = '⏳ 正在用 pandoc 转换...';
+      result.style.display = 'none';
+      vscode.postMessage({ type: 'exportWord', mathFmt, hlStyle });
     });
 
     document.getElementById('btn-xhs-python').addEventListener('click', () => {
@@ -2935,7 +4138,14 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     });
 
     document.getElementById('btn-export').addEventListener('click', () => {
-      vscode.postMessage({ type: 'exportHtml' });
+      const outputPath = (document.getElementById('html-output-path').value || '').trim();
+      closeAllDropdowns();
+      vscode.postMessage({ type: 'exportHtml', outputPath });
+    });
+
+    document.getElementById('btn-style').addEventListener('click', () => {
+      togglePanel('style-panel', 'stylePanelOpen',
+        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'}]);
     });
 
     // 应用自定义 CSS
@@ -3006,6 +4216,28 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           if (panelState.tocPanelOpen) buildToc();
           break;
         }
+
+        case 'syncToLine': {
+          // 编辑器光标行 → 滚动到预览对应标题位置
+          // data-source-line 只有标题元素有，找最近的小于等于目标行的那个
+          const targetLine = typeof msg.line === 'number' ? msg.line : 0;
+          const headings = Array.from(document.querySelectorAll('#preview-content [data-source-line]'));
+          if (!headings.length) break;
+          let best = null;
+          for (const el of headings) {
+            const l = parseInt(el.dataset.sourceLine, 10);
+            if (l <= targetLine) best = el;
+          }
+          // 如果光标在第一个标题之前，滚到顶部
+          if (!best) {
+            document.getElementById('preview-scroll').scrollTo({ top: 0, behavior: 'smooth' });
+            break;
+          }
+          const scroller = document.getElementById('preview-scroll');
+          // offsetTop 已经在 CSS zoom 坐标系里，scrollTop 也是同一坐标系，直接使用
+          scroller.scrollTo({ top: Math.max(0, best.offsetTop - 60), behavior: 'smooth' });
+          break;
+        }
         case 'themeList': {
           const sel = document.getElementById('theme-select');
           sel.innerHTML = '';
@@ -3026,7 +4258,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         case 'wechatHtml': {
           const btn = document.getElementById('btn-copy');
           btn.disabled = false;
-          btn.textContent = '📋 复制微信';
+          const _wl = btn.querySelector('.item-label'); if (_wl) _wl.textContent = '复制到剪贴板';
           const html = msg.html || '';
           // 优先用 ClipboardItem API，保留富文本格式
           if (navigator.clipboard && window.ClipboardItem) {
@@ -3066,13 +4298,14 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         case 'wechatHtmlError': {
           const btn = document.getElementById('btn-copy');
           btn.disabled = false;
-          btn.textContent = '📋 复制微信';
+          const _wle = btn.querySelector('.item-label'); if (_wle) _wle.textContent = '复制到剪贴板';
           showToast('复制失败：' + (msg.message || '未知错误'), 'error');
           break;
         }
         case 'zhihuHtml': {
           const btn = document.getElementById('btn-zhihu');
-          btn.disabled = false; btn.textContent = '📝 复制知乎';
+          btn.disabled = false;
+          const _zl = btn.querySelector('.item-label'); if (_zl) _zl.textContent = '复制到剪贴板';
           const html = msg.html || '';
           const doCopy = () => {
             if (navigator.clipboard && window.ClipboardItem) {
@@ -3101,13 +4334,15 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         }
         case 'zhihuHtmlError': {
           const btn = document.getElementById('btn-zhihu');
-          btn.disabled = false; btn.textContent = '📝 复制知乎';
+          btn.disabled = false;
+          const _zle = btn.querySelector('.item-label'); if (_zle) _zle.textContent = '复制到剪贴板';
           showToast('复制失败：' + (msg.message || '未知错误'), 'error');
           break;
         }
         case 'xhsCopyHtml': {
           const btn = document.getElementById('btn-xhs-copy');
-          btn.disabled = false; btn.textContent = '📱 复制小红书';
+          btn.disabled = false;
+          const _xl = btn.querySelector('.item-label'); if (_xl) _xl.textContent = '复制到剪贴板';
           const html = msg.html || '';
           const doCopy = () => {
             if (navigator.clipboard && window.ClipboardItem) {
@@ -3136,7 +4371,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         }
         case 'xhsCopyHtmlError': {
           const btn = document.getElementById('btn-xhs-copy');
-          btn.disabled = false; btn.textContent = '📱 复制小红书';
+          btn.disabled = false;
+          const _xle = btn.querySelector('.item-label'); if (_xle) _xle.textContent = '复制到剪贴板';
           showToast('复制失败：' + (msg.message || '未知错误'), 'error');
           break;
         }
@@ -3360,27 +4596,221 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           res.style.display = 'block';
           break;
         }
+
+        case 'pptLlmInstruction': {
+          const ta = document.getElementById('ppt-llm-instruction');
+          if (ta) ta.value = msg.instruction || '';
+          break;
+        }
+        case 'pptLlmProgress': {
+          setPptProgress(1, 3, msg.label || '');
+          break;
+        }
+        case 'pptLlmResult': {
+          const btn = document.getElementById('btn-ppt-llm-preview');
+          if (btn) { btn.disabled = false; btn.textContent = '👁 预览改写结果'; }
+          const wrap = document.getElementById('ppt-llm-preview-wrap');
+          const ta   = document.getElementById('ppt-llm-preview-text');
+          if (ta) ta.value = msg.slidevMd || '';
+          if (wrap) wrap.style.display = '';
+          document.getElementById('ppt-progress-wrap').style.display = 'none';
+          // 更新版本导航栏
+          if (msg.versions) updatePptVerBar(msg.versions);
+          showToast('✅ AI 改写完成，已保存版本 ' + ((msg.versions?.current ?? 0) + 1), 'success');
+          break;
+        }
+
+        case 'pptVersionsLoaded': {
+          updatePptVerBar(msg.versions);
+          if (msg.current) {
+            const ta = document.getElementById('ppt-llm-preview-text');
+            if (ta) { ta.value = msg.current; document.getElementById('ppt-llm-preview-wrap').style.display = ''; }
+          }
+          break;
+        }
+        case 'pptVersionSaved': {
+          updatePptVerBar(msg.versions);
+          showToast('✅ 已保存', 'success');
+          break;
+        }
+        case 'pptVersionSwitched': {
+          updatePptVerBar(msg.versions);
+          const ta = document.getElementById('ppt-llm-preview-text');
+          if (ta && msg.markdown !== undefined) ta.value = msg.markdown;
+          break;
+        }
+        case 'pptVersionDeleted': {
+          updatePptVerBar(msg.versions);
+          const ta = document.getElementById('ppt-llm-preview-text');
+          if (ta) ta.value = msg.markdown || '';
+          if (!msg.versions?.total) document.getElementById('ppt-llm-preview-wrap').style.display = 'none';
+          showToast('已删除', '');
+          break;
+        }
+        case 'pptLlmError': {
+          const btn = document.getElementById('btn-ppt-llm-preview');
+          if (btn) { btn.disabled = false; btn.textContent = '👁 预览改写结果'; }
+          document.getElementById('ppt-progress-wrap').style.display = 'none';
+          showToast('❌ LLM 改写失败：' + (msg.message || ''), 'error', 4000);
+          break;
+        }
+        case 'pptProgress': {
+          setPptProgress(msg.step || 1, msg.total || 5, msg.label || '');
+          break;
+        }
+        case 'pptResult': {
+          const btn = document.getElementById('btn-ppt-export');
+          if (btn) { btn.disabled = false; btn.textContent = '📊 生成 PPTX'; }
+          const cancel = document.getElementById('btn-ppt-cancel');
+          if (cancel) cancel.style.display = 'none';
+          const wrap = document.getElementById('ppt-progress-wrap');
+          if (wrap) wrap.style.display = 'none';
+          const bar = document.getElementById('ppt-progress-bar');
+          if (bar) bar.style.width = '0%';
+          const res = document.getElementById('ppt-result');
+          if (res) {
+            if (msg.success) {
+              res.className = 'upload-result success';
+              res.textContent = \`✅ 已生成：\${msg.filename || 'output.pptx'}\`;
+              showToast('PPTX 已生成！', 'success');
+            } else {
+              res.className = 'upload-result error';
+              res.textContent = msg.error === '已取消'
+                ? '⏹ 已取消'
+                : \`❌ 生成失败：\${msg.error || '未知错误'}\`;
+            }
+            res.style.display = 'block';
+          }
+          break;
+        }
+
+        case 'wordProgress': {
+          const prog = document.getElementById('word-progress');
+          if (prog) { prog.style.display = 'block'; prog.textContent = msg.message || ''; }
+          break;
+        }
+        case 'wordResult': {
+          const btn = document.getElementById('btn-word-export');
+          if (btn) { btn.disabled = false; btn.textContent = '📄 生成 Word'; }
+          const prog = document.getElementById('word-progress');
+          if (prog) prog.style.display = 'none';
+          const res = document.getElementById('word-result');
+          if (res) {
+            if (msg.success) {
+              res.className = 'upload-result success';
+              res.textContent = \`✅ 已生成：\${msg.filename || 'output.docx'}\`;
+              showToast('Word 已生成！', 'success');
+            } else {
+              res.className = 'upload-result error';
+              res.textContent = \`❌ 生成失败：\${msg.error || '未知错误'}\`;
+            }
+            res.style.display = 'block';
+          }
+          break;
+        }
       }
     });
 
-    // ─── 缩放控制 ───
-    function setZoom(zoom) {
-      currentZoom = Math.max(30, Math.min(200, zoom));
-      const el = document.getElementById('preview-content');
-      if (el) el.style.zoom = currentZoom + '%';
+    // ─── 局部缩放：transform scale + 拖拽平移 ───
+    // 用 transform:scale() 代替 zoom，放大后可拖拽查看任意局部，不影响滚动位置
+    // ─── 缩放系统：两种模式 ───────────────────────────────────
+    // 整体缩放（工具栏 ＋/－/↺）：改 font-size，内容正常重排，位置稳定
+    // ─── 缩放系统 ───────────────────────────────────────────────
+    // 所有缩放方式（工具栏+/-、触控板双指、Ctrl+滚轮）统一做局部缩放：
+    // 以当前视口中心为锚点，缩放后该锚点对应的内容保持在视口同一位置。
+    // 实现：CSS zoom 影响布局（scrollHeight 等比变化），
+    // 缩放前后保持"锚点内容位置 / scrollHeight"的比值不变，反算出新的 scrollTop。
+
+    let currentZoom = 100;  // 当前缩放百分比，100 = 原始大小
+
+    function applyZoom(newZoom, anchorY) {
+      const scroller = document.getElementById('preview-scroll');
+      const canvas   = document.getElementById('zoom-canvas');
+      if (!canvas || !scroller) return;
+
+      newZoom = Math.max(30, Math.min(500, Math.round(newZoom)));
+      if (newZoom === currentZoom) return;
+
+      // 锚点：视口内哪个 Y 坐标的内容要保持不动
+      // 传入 anchorY（鼠标位置）；不传则用视口中心
+      const ay = (anchorY !== undefined) ? anchorY : scroller.clientHeight / 2;
+
+      // 缩放前，锚点对应的内容坐标 = scrollTop + ay
+      // （scrollTop 和 ay 都在"已缩放"坐标系里，二者一致）
+      const anchorContent = scroller.scrollTop + ay;
+
+      const ratio = newZoom / currentZoom;
+      currentZoom = newZoom;
+      canvas.style.zoom = currentZoom / 100;
+
+      // 读 scrollHeight 触发同步 layout reflow，确保 zoom 已生效
+      void scroller.scrollHeight;
+
+      // 缩放后同一内容点在新坐标系里的位置 = anchorContent * ratio
+      // 要让它仍出现在视口的 ay 处：scrollTop = anchorContent * ratio - ay
+      scroller.scrollTop = anchorContent * ratio - ay;
+
       const zv = document.getElementById('zoom-value');
       if (zv) zv.textContent = currentZoom + '%';
     }
-    document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(currentZoom - 10));
-    document.getElementById('btn-zoom-in').addEventListener('click',  () => setZoom(currentZoom + 10));
-    document.getElementById('btn-zoom-reset').addEventListener('click', () => setZoom(100));
 
-    // 鼠标滚轮 + Ctrl 快捷缩放
-    document.getElementById('preview-content').addEventListener('wheel', (e) => {
+    // 工具栏 +/- 以视口中心为锚点
+    const scrollEl = document.getElementById('preview-scroll');
+    document.getElementById('btn-zoom-in').addEventListener('click', () => {
+      applyZoom(currentZoom + 10);
+    });
+    document.getElementById('btn-zoom-out').addEventListener('click', () => {
+      applyZoom(currentZoom - 10);
+    });
+    document.getElementById('btn-zoom-reset').addEventListener('click', () => {
+      currentZoom = 100;
+      document.getElementById('zoom-canvas').style.zoom = 1;
+      document.getElementById('preview-scroll').scrollTop = 0;
+      const zv = document.getElementById('zoom-value');
+      if (zv) zv.textContent = '100%';
+    });
+
+    // 触控板双指捏合 / Ctrl+滚轮 → 以鼠标位置为锚点
+    // macOS 触控板 pinch 会触发 ctrlKey=true 的 wheel 事件，deltaY 是小数
+    // 普通鼠标滚轮 deltaY 通常是 ±100，用比例因子统一处理
+    scrollEl.addEventListener('wheel', (e) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      setZoom(currentZoom + (e.deltaY < 0 ? 10 : -10));
+      const rect   = scrollEl.getBoundingClientRect();
+      const mouseY = e.clientY - rect.top;
+      // 触控板 pinch: deltaY 是小数（±1~5），鼠标滚轮: ±100~120
+      // 统一换算为缩放比例：每 100 deltaY 对应 20% 变化
+      const factor = Math.abs(e.deltaY) < 10
+        ? e.deltaY * 0.5          // 触控板：精细控制
+        : e.deltaY > 0 ? 10 : -10; // 鼠标滚轮：固定步长
+      applyZoom(currentZoom - factor, mouseY);
     }, { passive: false });
+
+    // ─── 双向同步：编辑器 ↔ 预览（纯手动，不自动触发）───
+    // data-source-line 已在渲染时注入到每个标题元素，无需手动配对
+
+    // 「→ 预览」按钮：请求编辑器当前光标行，extension 推送 syncToLine 消息
+    document.getElementById('btn-sync-to-preview').addEventListener('click', () => {
+      vscode.postMessage({ type: 'requestCursorLine' });
+    });
+
+    // 「← 编辑器」按钮：找预览视口内第一个可见标题，把其行号发给 extension
+    document.getElementById('btn-sync-to-editor').addEventListener('click', () => {
+      const scroller = document.getElementById('preview-scroll');
+      const scrollTop = scroller.scrollTop;
+      const headings = Array.from(document.querySelectorAll('#preview-content [data-source-line]'));
+      let best = null;
+      for (const el of headings) {
+        const top = el.offsetTop; // CSS zoom 下 offsetTop 已是缩放后坐标，与 scrollTop 一致
+        if (top <= scrollTop + 80) {
+          best = el; // 更新到最后一个在视口上方的标题
+        } else {
+          break; // 已过了视口上沿，停止
+        }
+      }
+      const line = best ? parseInt(best.dataset.sourceLine, 10) : 0;
+      vscode.postMessage({ type: 'scrollToEditorLine', line });
+    });
 
     // ─── Todo 任务列表交互 ───
     document.getElementById('preview-content').addEventListener('change', (e) => {
@@ -3491,14 +4921,20 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     function applyLlmState(prefix, cfg){
       if(!cfg) return;
-      if($(prefix+'-llmbase')  && !$(prefix+'-llmbase').value)  $(prefix+'-llmbase').value  = cfg.baseUrl || '';
-      if($(prefix+'-llmmodel') && !$(prefix+'-llmmodel').value) $(prefix+'-llmmodel').value = cfg.model || '';
       const st = $(prefix+'-llmstate');
       if(st){
-        if(cfg.hasKey){ st.textContent='● 已配置 Key'; st.style.color='#3ddc84'; }
-        else if(cfg.keyOptional){ st.textContent='● 本地端点（无需 Key）'; st.style.color='#3ddc84'; }
-        else { st.textContent='● 未配置 Key（可先用本地提取）'; st.style.color='#ffb020'; }
+        if(cfg.hasKey){ st.textContent='LLM 已配置 ✓'; st.style.color='#3ddc84'; }
+        else if(cfg.keyOptional){ st.textContent='LLM 本地端点 ✓'; st.style.color='#3ddc84'; }
+        else { st.textContent='⚠️ LLM 未配置'; st.style.color='#ffb020'; }
       }
+    }
+
+    function applyLlmStateGlobal(cfg){
+      if(!cfg) return;
+      const base  = $('global-llm-base');
+      const model = $('global-llm-model');
+      if(base  && !base.value)  base.value  = cfg.baseUrl || '';
+      if(model && !model.value) model.value = cfg.model || '';
     }
 
     const $ = (id) => document.getElementById(id);
@@ -3784,32 +5220,19 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         const v=verState[platform]; if(!v || !v.total) return;
         vscode.postMessage({ type:'socialDeleteVersion', platform, index:v.current });
       });
-      // ── LLM 配置 ──
-      if($(prefix+'-llmtoggle')) $(prefix+'-llmtoggle').addEventListener('click', (e)=>{
+      // ── 生成指令折叠 ──
+      if($(prefix+'-prompttoggle')) $(prefix+'-prompttoggle').addEventListener('click', (e)=>{
         e.preventDefault();
-        const box=$(prefix+'-llmbox');
-        if(box) box.style.display = (box.style.display==='none') ? '' : 'none';
+        const ta=$(prefix+'-prompt');
+        const lnk=$(prefix+'-prompttoggle');
+        if(ta){ const hidden=(ta.style.display==='none'); ta.style.display=hidden?'':'none'; if(lnk) lnk.textContent=hidden?'收起指令 ▴':'展开指令 ▾'; }
       });
-      if($(prefix+'-llmpreset')) $(prefix+'-llmpreset').addEventListener('change', (e)=>{
-        const p = PRESETS[e.target.value];
-        if(!p) return;
-        if($(prefix+'-llmbase'))  $(prefix+'-llmbase').value  = p.baseUrl;
-        if($(prefix+'-llmmodel')) $(prefix+'-llmmodel').value = p.model;
-        const r=$(prefix+'-llmresult'); if(r) r.textContent = p.note || '';
-      });
-      if($(prefix+'-llmsave')) $(prefix+'-llmsave').addEventListener('click', ()=>{
-        vscode.postMessage({ type:'llmSaveConfig',
-          baseUrl: ($(prefix+'-llmbase')||{}).value || '',
-          model:   ($(prefix+'-llmmodel')||{}).value || '',
-          apiKey:  ($(prefix+'-llmkey')||{}).value || undefined,   // 空 = 保持不变
-        });
-      });
-      if($(prefix+'-llmtest')) $(prefix+'-llmtest').addEventListener('click', ()=>{
-        const r=$(prefix+'-llmresult'); if(r){ r.style.color='#4ea1ff'; r.textContent='正在测试连接…'; }
-        vscode.postMessage({ type:'llmTestConnection' });
-      });
-      if($(prefix+'-llmclear')) $(prefix+'-llmclear').addEventListener('click', ()=>{
-        vscode.postMessage({ type:'llmSaveConfig', apiKey:'' });
+      // ── 更多操作折叠 ──
+      if($(prefix+'-moretoggle')) $(prefix+'-moretoggle').addEventListener('click', (e)=>{
+        e.preventDefault();
+        const box=$(prefix+'-morebox');
+        const lnk=$(prefix+'-moretoggle');
+        if(box){ const hidden=(box.style.display==='none'); box.style.display=hidden?'':'none'; if(lnk) lnk.textContent=hidden?'更多 ▴':'更多 ▾'; }
       });
       // 登录 / 退出
       if($(prefix+'-login')) $(prefix+'-login').addEventListener('click', ()=>{
@@ -3870,21 +5293,21 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       // LLM 配置类消息与平台无关，广播给所有已注册的块
       if(msg.type==='llmConfig' || msg.type==='llmConfigSaved'){
         for(const pf of Object.values(registered)) applyLlmState(pf, msg.llm);
+        applyLlmStateGlobal(msg.llm);
         if(msg.type==='llmConfigSaved'){
-          for(const pf of Object.values(registered)){
-            const r=$(pf+'-llmresult'); if(r){ r.style.color='#3ddc84'; r.textContent='✅ 已保存（Key 存入系统钥匙串）'; }
-            const k=$(pf+'-llmkey'); if(k) k.value='';
-          }
+          const gr=$('global-llm-result');
+          if(gr){ gr.style.color='#3ddc84'; gr.textContent='✅ 已保存（Key 存入系统钥匙串）'; }
+          const gk=$('global-llm-key'); if(gk) gk.value='';
         }
         return;
       }
       if(msg.type==='llmTestResult' || msg.type==='llmTestProgress' || msg.type==='llmConfigError'){
-        for(const pf of Object.values(registered)){
-          const r=$(pf+'-llmresult'); if(!r) continue;
-          if(msg.type==='llmTestProgress'){ r.style.color='#4ea1ff'; r.textContent=msg.message; }
-          else if(msg.type==='llmConfigError'){ r.style.color='#ff6b6b'; r.textContent='保存失败：'+msg.message; }
-          else if(msg.ok){ r.style.color='#3ddc84'; r.textContent='✅ 连接成功，模型回复：'+msg.reply; }
-          else { r.style.color='#ff6b6b'; r.textContent='❌ 连接失败：'+msg.message; }
+        const gr=$('global-llm-result');
+        if(gr){
+          if(msg.type==='llmTestProgress'){ gr.style.color='#4ea1ff'; gr.textContent=msg.message; }
+          else if(msg.type==='llmConfigError'){ gr.style.color='#ff6b6b'; gr.textContent='保存失败：'+msg.message; }
+          else if(msg.ok){ gr.style.color='#3ddc84'; gr.textContent='✅ 连接成功，模型回复：'+msg.reply; }
+          else { gr.style.color='#ff6b6b'; gr.textContent='❌ 连接失败：'+msg.message; }
         }
         return;
       }
