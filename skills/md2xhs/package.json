@@ -1,0 +1,29 @@
+{
+  "name": "md2xhs",
+  "version": "1.0.0",
+  "description": "把 Markdown 渲染成适合小红书发布的多张长图（代码高亮 + KaTeX 公式 + 本地图片 + 智能分片）",
+  "main": "md2xhs.js",
+  "bin": {
+    "md2xhs": "./md2xhs.js"
+  },
+  "scripts": {
+    "install-browser": "node md2xhs.js install"
+  },
+  "keywords": ["markdown", "xiaohongshu", "screenshot", "xhs", "skill"],
+  "author": "marsggbo",
+  "license": "MIT",
+  "dependencies": {
+    "cheerio": "^1.0.0-rc.12",
+    "gray-matter": "^4.0.3",
+    "highlight.js": "^11.9.0",
+    "juice": "^9.1.0",
+    "katex": "^0.16.0",
+    "marked": "^11.1.1",
+    "mathjax-full": "^3.2.1",
+    "playwright-core": "^1.59.1",
+    "pngjs": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
