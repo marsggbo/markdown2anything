@@ -2158,13 +2158,13 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       text-overflow: ellipsis;
       display: block;
     }
-    /* 第二行：所有操作按钮，overflow:visible 确保下拉可显示 */
+    /* 第二行：所有操作按钮，窄窗口自动换行；overflow:visible 确保下拉可显示 */
     .toolbar-btn-row {
       display: flex;
       align-items: center;
       gap: 6px;
       padding: 6px 14px 7px;
-      flex-wrap: nowrap;
+      flex-wrap: wrap;
       overflow: visible;
     }
     .btn {
