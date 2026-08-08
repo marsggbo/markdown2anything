@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 
-const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtml } = require('./lib/converter');
+const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtmlByMode } = require('./lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('./lib/themes');
 const zhihu = require('./lib/zhihu');
 const llm = require('./lib/llm');
@@ -393,12 +393,12 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       // 用 Node.js + Playwright 截图（无需 Python，自动检测/安装 Chromium）
       const { spawn } = require('child_process');
       const os = require('os');
-      const { width = 1080, height = 1440, padding = 40, bg = '#ffffff', autoExport = false } = msg;
+      const { width = 1080, height = 1440, padding = 40, bg = '#ffffff', autoExport = false, mode = 'classic' } = msg;
 
       // 生成独立渲染 HTML
       const { bodyHtml } = renderMarkdown(mdPath);
       const theme = getTheme(currentThemeId);
-      const htmlContent = buildXhsRenderHtml(bodyHtml, path.dirname(mdPath), theme);
+      const htmlContent = buildXhsRenderHtmlByMode(bodyHtml, path.dirname(mdPath), theme, mode);
       const tmpHtml = path.join(os.tmpdir(), `markdown2anything_xhs_${Date.now()}.html`);
       const base = path.basename(mdPath, path.extname(mdPath));
       // 生成预览时保存到系统临时目录，一键导出时才保存到项目目录
@@ -438,7 +438,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
             panel.webview.postMessage({ type: 'xhsPythonProgress', message: '📥 首次使用，正在下载 Chromium（约 150MB）...' });
             await installChromium(panel);
             // 重新生成 HTML（tmpHtml 已被删除）
-            const htmlContent2 = buildXhsRenderHtml(bodyHtml, path.dirname(mdPath), theme);
+            const htmlContent2 = buildXhsRenderHtmlByMode(bodyHtml, path.dirname(mdPath), theme, mode);
             fs.writeFileSync(tmpHtml, htmlContent2, 'utf8');
             runScreenshot(true);
             return;
@@ -550,6 +550,13 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       currentThemeId = msg.themeId || DEFAULT_THEME_ID;
       // 重新渲染预览
       updatePreview(panel, mdPath);
+      break;
+    }
+
+    case 'setXhsExportMode': {
+      const mode = msg.mode === 'adaptive' ? 'adaptive' : 'classic';
+      const cfg = vscode.workspace.getConfiguration('markdown2anything');
+      await cfg.update('xhs.exportMode', mode, vscode.ConfigurationTarget.Global);
       break;
     }
 
@@ -1463,14 +1470,16 @@ async function ensureXhsImages(mdPath, panel, platform) {
 }
 
 /** 跑截图脚本，把文章渲染成长图存到 <base>_xhs/，返回图片路径 */
-function exportXhsImages(mdPath, panel, platform, retried = false) {
+function exportXhsImages(mdPath, panel, platform, retried = false, exportMode) {
   return new Promise((resolve, reject) => {
     const { spawn } = require('child_process');
     const os = require('os');
 
+    const cfg = vscode.workspace.getConfiguration('markdown2anything');
+    const mode = exportMode || cfg.get('xhs.exportMode', 'classic');
     const { bodyHtml } = renderMarkdown(mdPath);
     const theme = getTheme(currentThemeId);
-    const htmlContent = buildXhsRenderHtml(bodyHtml, path.dirname(mdPath), theme);
+    const htmlContent = buildXhsRenderHtmlByMode(bodyHtml, path.dirname(mdPath), theme, mode);
     const tmpHtml = path.join(os.tmpdir(), `markdown2anything_xhs_${Date.now()}.html`);
     const base = path.basename(mdPath, path.extname(mdPath));
     const outDir = path.join(path.dirname(mdPath), `${base}_xhs`);
@@ -2075,6 +2084,7 @@ function socialBlockHtml(platform, prefix, name, titleLimit, extraHint) {
 function getWebviewHtml(webview, _bodyHtml, mdPath) {
   const nonce = getNonce();
   const csp = webview.cspSource;
+  const xhsExportMode = vscode.workspace.getConfiguration('markdown2anything').get('xhs.exportMode', 'classic');
 
   // KaTeX 资源 URI（从扩展的 node_modules 加载）
   const katexDistPath = path.join(extContext.extensionUri.fsPath, 'node_modules', 'katex', 'dist');
@@ -3058,6 +3068,13 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       <div class="side-panel-body">
         <p class="hint">将文章渲染为多张适合小红书发布的图片。首次使用会自动下载 Chromium（约 150MB），之后无需等待。</p>
 
+        <label>导出模式</label>
+        <select id="xhs-export-mode" style="width:100%;padding:6px 8px;margin-bottom:8px;background:#2d2d2d;color:#eee;border:1px solid #555;border-radius:4px;">
+          <option value="classic"${xhsExportMode === 'classic' ? ' selected' : ''}>默认 HTML 页面截图</option>
+          <option value="adaptive"${xhsExportMode === 'adaptive' ? ' selected' : ''}>小红书尺寸自适应截图</option>
+        </select>
+        <p class="hint" id="xhs-mode-hint" style="margin-top:-4px;margin-bottom:10px;"></p>
+
         <label>图片宽度（px）</label>
         <input type="number" id="xhs-width" value="1080" min="600" max="2000">
 
@@ -3311,6 +3328,35 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false, twitterPanelOpen: false, pptPanelOpen: false, wordPanelOpen: false, llmConfigPanelOpen: false };
 
     const XHS_DEFAULTS = { width: 1080, height: 1440, padding: 40, tolerance: 15 };
+    const XHS_ADAPTIVE_DEFAULTS = { width: 1080, height: 1440, padding: 48, tolerance: 15 };
+
+    function getXhsExportMode() {
+      const el = document.getElementById('xhs-export-mode');
+      return el && el.value === 'adaptive' ? 'adaptive' : 'classic';
+    }
+
+    function applyXhsModeDefaults(mode, resetAll) {
+      const defs = mode === 'adaptive' ? XHS_ADAPTIVE_DEFAULTS : XHS_DEFAULTS;
+      if (resetAll) {
+        document.getElementById('xhs-width').value = defs.width;
+        document.getElementById('xhs-height').value = defs.height;
+        document.getElementById('xhs-padding').value = defs.padding;
+        document.getElementById('xhs-tolerance').value = defs.tolerance;
+      }
+      const hint = document.getElementById('xhs-mode-hint');
+      hint.textContent = mode === 'adaptive'
+        ? '使用 1080 × 1440 的 3:4 图片排版，放大正文、代码、公式和间距，适合手机阅读。'
+        : '保留当前主题和桌面 HTML 页面排版，按设置尺寸切分截图。';
+    }
+
+    document.getElementById('xhs-export-mode').addEventListener('change', function() {
+      const mode = getXhsExportMode();
+      applyXhsModeDefaults(mode, true);
+      window._xhsLastSlices = null;
+      document.getElementById('xhs-output').innerHTML = '';
+      vscode.postMessage({ type: 'setXhsExportMode', mode });
+    });
+    applyXhsModeDefaults(getXhsExportMode(), false);
 
     // ─── 工具函数 ───
     function showToast(msg, type = '', duration = 2500) {
@@ -3440,6 +3486,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       const pad    = parseInt(document.getElementById('xhs-padding').value);
       const tol    = parseInt(document.getElementById('xhs-tolerance').value) || XHS_DEFAULTS.tolerance;
       const bgColor = currentThemeBg || '#ffffff';
+      const mode   = getXhsExportMode();
       const SCALE = 2;
 
       const btn = document.getElementById('btn-xhs-generate');
@@ -4091,15 +4138,12 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       btn.disabled = true; btn.textContent = '⏳ 渲染中...';
       document.getElementById('xhs-output').innerHTML = '<p class="hint">⏳ 正在生成，请稍候...</p>';
       // autoExport: false → 仅生成预览，保存到临时目录
-      vscode.postMessage({ type: 'generateXhsViaPython', width: imgW, height: imgH, padding: pad, bg: bgColor, autoExport: false });
+      vscode.postMessage({ type: 'generateXhsViaPython', width: imgW, height: imgH, padding: pad, bg: bgColor, autoExport: false, mode });
     });
 
     document.getElementById('btn-xhs-reset').addEventListener('click', () => {
-      document.getElementById('xhs-width').value     = XHS_DEFAULTS.width;
-      document.getElementById('xhs-height').value    = XHS_DEFAULTS.height;
-      document.getElementById('xhs-padding').value   = XHS_DEFAULTS.padding;
-      document.getElementById('xhs-tolerance').value = XHS_DEFAULTS.tolerance;
-      showToast('已恢复默认参数');
+      applyXhsModeDefaults(getXhsExportMode(), true);
+      showToast('已恢复当前模式的默认参数');
     });
 
     document.getElementById('btn-xhs-export-all').addEventListener('click', () => {
@@ -4115,11 +4159,12 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         const imgH   = parseInt(document.getElementById('xhs-height').value)    || XHS_DEFAULTS.height;
         const pad    = parseInt(document.getElementById('xhs-padding').value);
         const bgColor = currentThemeBg || '#ffffff';
+        const mode   = getXhsExportMode();
         btn.disabled = true; btn.textContent = '⏳ 生成并导出中...';
         document.getElementById('btn-xhs-python').disabled = true;
         document.getElementById('btn-xhs-python').textContent = '⏳ 渲染中...';
         document.getElementById('xhs-output').innerHTML = '<p class="hint">⏳ 正在生成，请稍候...</p>';
-        vscode.postMessage({ type: 'generateXhsViaPython', width: imgW, height: imgH, padding: pad, bg: bgColor, autoExport: true });
+        vscode.postMessage({ type: 'generateXhsViaPython', width: imgW, height: imgH, padding: pad, bg: bgColor, autoExport: true, mode });
       }
     });
 

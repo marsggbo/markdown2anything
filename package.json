@@ -2,7 +2,7 @@
   "name": "markdown2anything",
   "displayName": "Markdown2Anything — 一篇 Markdown 一键发到微信/知乎/小红书/Twitter",
   "description": "写完一篇 Markdown，一键发布到微信公众号、知乎、小红书、Twitter(X)：自动截长图、AI 生成平台文案与串推、自动传图填字。支持 LaTeX 公式、10 套主题、实时预览。",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",
@@ -163,6 +163,15 @@
           ],
           "default": "playwright",
           "description": "小红书发布后端。playwright：注入 cookie 模拟真浏览器自动发布；manual：仅导出长图 + 复制富文本手动发。"
+        },
+        "markdown2anything.xhs.exportMode": {
+          "type": "string",
+          "enum": [
+            "classic",
+            "adaptive"
+          ],
+          "default": "classic",
+          "description": "小红书图片导出模式。classic：保留当前主题样式；adaptive：使用适合 3:4 手机图片阅读的大字体排版。"
         },
         "markdown2anything.publish.headless": {
           "type": "boolean",
