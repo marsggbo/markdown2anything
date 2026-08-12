@@ -2048,6 +2048,7 @@ function getNonce() {
  */
 function socialBlockHtml(platform, prefix, name, titleLimit, extraHint) {
   const isThread = platform === 'twitter';
+  const publishBtnClass = isThread ? 'btn btn-twitter' : 'btn btn-xhs';
 
   // 内容区：Twitter 用串推卡片列表；小红书用单条 标题/正文/标签
   const contentRows = isThread
@@ -2056,109 +2057,123 @@ function socialBlockHtml(platform, prefix, name, titleLimit, extraHint) {
       + '<label style="font-weight:normal;cursor:pointer;font-size:12px;">'
       + '<input type="checkbox" id="' + prefix + '-autonum" checked> 自动编号 1/N'
       + '</label></div>'
-      + '<label style="margin-top:8px;">标签（整串共用，用分号 <code>;</code> 分隔）</label>'
+      + '<label style="margin-top:10px;">标签（整串共用，分号 <code>;</code> 分隔）</label>'
       + '<input type="text" id="' + prefix + '-tags" placeholder="例：Gemma4; 端侧AI" style="width:100%;box-sizing:border-box;">'
-      + '<label style="margin-top:8px;">全文链接位置</label>'
+      + '<label style="margin-top:10px;">全文链接位置</label>'
       + '<select id="' + prefix + '-linkpos" style="width:100%;box-sizing:border-box;padding:6px 8px;background:#2d2d2d;color:#eee;border:1px solid #444;border-radius:4px;">'
       + '<option value="all" selected>每条都放（推荐，谁都看得到）</option>'
       + '<option value="first">只放第 1 条（曝光最高）</option>'
       + '<option value="last">只放最后一条</option>'
       + '</select>'
       + '<div id="' + prefix + '-thread"></div>'
-      + '<button class="btn btn-secondary" id="' + prefix + '-addtweet" style="margin-top:6px;padding:4px 10px;">＋ 添加一条</button>'
+      + '<button class="btn btn-secondary" id="' + prefix + '-addtweet" style="margin-top:8px;padding:4px 10px;">＋ 添加一条</button>'
       + '<p class="hint" style="margin-top:6px;">📎 一条一图：第 N 条自动配第 N 张长图，最后的总结条不配图。所有帖子都会自动带上 <b>#marsggbo</b>。</p>'
-    : '<label style="margin-top:4px;">标题 <span id="' + prefix + '-titlecount" style="color:#888;">0/' + titleLimit + '</span></label>'
+    : '<label style="margin-top:10px;">标题 * <span id="' + prefix + '-titlecount" style="color:#888;font-weight:normal;">0/' + titleLimit + '</span></label>'
       + '<input type="text" id="' + prefix + '-title" maxlength="' + (titleLimit * 2) + '" style="width:100%;box-sizing:border-box;">'
-      + '<label style="margin-top:8px;">正文</label>'
+      + '<label style="margin-top:10px;">正文 *</label>'
       + '<textarea id="' + prefix + '-body" rows="6" style="width:100%;box-sizing:border-box;font-family:inherit;"></textarea>'
-      + '<label style="margin-top:8px;">标签（用分号 <code>;</code> 分隔，不用带 #）</label>'
-      + '<input type="text" id="' + prefix + '-tags" placeholder="例：LLM; 多模态; 端侧推理" style="width:100%;box-sizing:border-box;">';
+      + '<label style="margin-top:10px;">标签</label>'
+      + '<input type="text" id="' + prefix + '-tags" placeholder="例：LLM; 多模态; 端侧推理（分号分隔，不用带 #）" style="width:100%;box-sizing:border-box;">';
 
   return `
         <div class="social-block" data-platform="${platform}" data-prefix="${prefix}" data-title-limit="${titleLimit}">
 
-          <!-- ① 账号 -->
-          <div class="social-section s-muted">
-            <div class="social-section-title">账号</div>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-              <span class="social-status" id="${prefix}-status" title="Cookie 登录状态与有效期">● 未登录</span>
-              <button class="btn btn-secondary" id="${prefix}-login" style="padding:4px 10px;">登录${name}</button>
-              <button class="btn btn-secondary" id="${prefix}-logout" style="padding:4px 8px;display:none;">退出</button>
-            </div>
-            <a href="#" id="${prefix}-pastetoggle" style="font-size:12px;color:#666;">🔑 手动登录 ▾</a>
-            <p class="hint" id="${prefix}-cookiehint" style="display:none;"></p>
-            <div id="${prefix}-pastebox" style="display:none;margin-top:6px;border:1px solid #3a3a3a;border-radius:4px;padding:8px;">
-              <a href="#" id="${prefix}-openlogin" style="font-size:12px;color:#4ea1ff;display:block;margin-bottom:6px;">🔗 打开${name}登录页</a>
-              <textarea id="${prefix}-pasteinput" rows="3" placeholder="粘贴浏览器里的 Cookie（name=value; name2=value2）或 JSON 数组" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;"></textarea>
-              <button class="btn btn-secondary" id="${prefix}-pastesave" style="margin-top:4px;padding:4px 10px;">保存 Cookie</button>
-            </div>
-          </div>
+          <!-- ✍ 文案区块 -->
+          <div class="section-block">
+            <div class="section-block-title">✍ 文案</div>
 
-          <!-- ② AI 生成 -->
-          <div class="social-section s-blue">
-            <div class="social-section-title">AI 生成</div>
-            <div style="display:flex;gap:16px;margin-bottom:8px;">
-              <label style="cursor:pointer;margin:0;"><input type="radio" name="${prefix}-mode" value="ai" checked> ✨ AI</label>
-              <label style="cursor:pointer;margin:0;"><input type="radio" name="${prefix}-mode" value="manual"> ✍️ 手动</label>
+            <!-- AI / 手动 + LLM 状态 -->
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+              <div style="display:flex;gap:14px;">
+                <label style="cursor:pointer;margin:0;"><input type="radio" name="${prefix}-mode" value="ai" checked> ✨ AI</label>
+                <label style="cursor:pointer;margin:0;"><input type="radio" name="${prefix}-mode" value="manual"> ✍️ 手动</label>
+              </div>
+              <span id="${prefix}-llmstate" style="font-size:11px;color:#ffb020;">⚠️ 未配置</span>
             </div>
+
+            <!-- AI 生成区 -->
             <div id="${prefix}-ai">
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-                <span id="${prefix}-llmstate" style="font-size:12px;color:#ffb020;">⚠️ LLM 未配置</span>
-                <a href="#" id="${prefix}-prompttoggle" style="font-size:12px;color:#666;">指令 ▾</a>
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+                <button class="btn btn-secondary" id="${prefix}-gen" style="flex:1;">✨ AI 生成</button>
+                <button class="btn-ghost" id="${prefix}-prompttoggle">指令 ▾</button>
+                <button class="btn btn-secondary" id="${prefix}-reprompt" title="恢复默认指令" style="padding:4px 8px;">↺</button>
               </div>
-              <textarea id="${prefix}-prompt" rows="4" style="display:none;width:100%;box-sizing:border-box;font-family:inherit;margin-bottom:6px;"></textarea>
-              <div style="display:flex;gap:6px;">
-                <button class="btn btn-xhs" id="${prefix}-gen" style="flex:1;">✨ AI 生成</button>
-                <button class="btn btn-secondary" id="${prefix}-reprompt" title="恢复默认指令" style="padding:4px 10px;">↺</button>
-              </div>
+              <textarea id="${prefix}-prompt" rows="3" style="display:none;width:100%;box-sizing:border-box;font-family:inherit;margin-bottom:6px;"></textarea>
             </div>
-            <div id="${prefix}-verbar" style="display:none;align-items:center;gap:6px;margin-top:8px;
-                 border:1px solid #3a3a3a;border-radius:4px;padding:5px 8px;">
+
+            <!-- 版本管理 -->
+            <div id="${prefix}-verbar" style="display:none;align-items:center;gap:6px;margin-bottom:8px;
+                 border:1px solid #333;border-radius:4px;padding:5px 8px;">
               <button class="btn btn-secondary" id="${prefix}-verprev" style="padding:2px 8px;" title="上一版">◀</button>
               <span id="${prefix}-verlabel" style="flex:1;text-align:center;font-size:12px;color:#aaa;"></span>
               <button class="btn btn-secondary" id="${prefix}-vernext" style="padding:2px 8px;" title="下一版">▶</button>
               <button class="btn btn-secondary" id="${prefix}-verdel" style="padding:2px 8px;color:#ff6b6b;" title="删除当前这一版">🗑</button>
             </div>
+
+            <!-- 内容字段 -->
+            ${contentRows}
+            <label style="margin-top:10px;">全文链接</label>
+            <input type="text" id="${prefix}-link" placeholder="留空则用 front matter 里的 permalink/url" style="width:100%;box-sizing:border-box;">
+
+            <!-- 文案操作（折叠） -->
+            <details class="section-details">
+              <summary>⋯ 更多操作 <span class="toggle-arrow">▶</span></summary>
+              <div class="section-details-body">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                  <button class="btn btn-secondary" id="${prefix}-local" title="用本地算法重新提取，不调用模型">↺ 本地提取</button>
+                  <button class="btn btn-secondary" id="${prefix}-savecopy" title="保存到 _social.json">💾 保存</button>
+                  <button class="btn btn-secondary" id="${prefix}-copytext">📋 复制</button>
+                </div>
+              </div>
+            </details>
+
+            <!-- AI/发布进度（统一放在文案区，贴近操作） -->
+            <div class="social-progress" id="${prefix}-progress" style="margin-top:8px;color:#4ea1ff;font-size:12px;white-space:pre-wrap;overflow-y:auto;max-height:160px;"></div>
           </div>
 
-          <!-- ③ 内容编辑（主编辑区，不加底色） -->
-          ${contentRows}
-          <label style="margin-top:8px;">全文链接</label>
-          <input type="text" id="${prefix}-link" placeholder="留空则用 front matter 里的 permalink/url" style="width:100%;box-sizing:border-box;">
+          <!-- 🚀 账号 & 发布区块 -->
+          <div class="section-block">
+            <div class="section-block-title">🚀 账号 &amp; 发布</div>
 
-          <!-- ④ 发布 -->
-          <div style="margin-top:12px;">
-            <button class="btn btn-xhs" id="${prefix}-publish" style="width:100%;padding:10px;font-size:14px;" title="注入 Cookie 打开真实浏览器，自动传图+填文">🚀 发布${name}</button>
-          </div>
-          <p class="hint" style="margin-top:6px;">${extraHint}</p>
-
-          <!-- 进度条 -->
-          <div id="${prefix}-steps" style="display:none;margin-top:8px;">
-            <div style="display:flex;justify-content:space-between;font-size:12px;color:#aaa;">
-              <span id="${prefix}-steplabel">准备中</span><span id="${prefix}-stepnum"></span>
+            <!-- 登录状态 + 按钮 -->
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+              <span class="social-status" id="${prefix}-status" title="Cookie 登录状态与有效期">● 未登录</span>
+              <button class="btn btn-secondary" id="${prefix}-login" style="padding:4px 10px;">登录${name}</button>
+              <button class="btn btn-secondary" id="${prefix}-logout" style="padding:4px 8px;display:none;">退出</button>
             </div>
-            <div style="background:#3a3a3a;border-radius:3px;height:6px;margin-top:3px;overflow:hidden;">
-              <div id="${prefix}-stepbar" style="background:#4ea1ff;height:100%;width:0%;transition:width .3s;"></div>
+            <p class="hint" id="${prefix}-cookiehint" style="display:none;margin-bottom:10px;"></p>
+
+            <!-- 发布按钮 -->
+            <button class="${publishBtnClass}" id="${prefix}-publish" style="width:100%;margin-top:8px;padding:10px;font-size:14px;" title="注入 Cookie 打开真实浏览器，自动传图+填文">🚀 发布${name}</button>
+            <p class="hint" style="margin-top:6px;">${extraHint}</p>
+
+            <!-- 发布进度条 -->
+            <div id="${prefix}-steps" style="display:none;margin-top:8px;">
+              <div style="display:flex;justify-content:space-between;font-size:12px;color:#aaa;">
+                <span id="${prefix}-steplabel">准备中</span><span id="${prefix}-stepnum"></span>
+              </div>
+              <div style="background:#3a3a3a;border-radius:3px;height:6px;margin-top:3px;overflow:hidden;">
+                <div id="${prefix}-stepbar" style="background:#4ea1ff;height:100%;width:0%;transition:width .3s;"></div>
+              </div>
+            </div>
+            <div style="margin-top:6px;">
+              <button class="btn btn-secondary" id="${prefix}-resume" style="display:none;width:100%;">▶️ 从断点继续</button>
+            </div>
+
+            <!-- Cookie 粘贴（折叠） -->
+            <details class="section-details">
+              <summary>🔑 手动 Cookie <span class="toggle-arrow">▶</span></summary>
+              <div class="section-details-body">
+                <button class="btn-ghost btn-ghost-blue" id="${prefix}-openlogin" style="display:block;margin-bottom:8px;">🔗 打开${name}登录页</button>
+                <label style="margin-top:0;">粘贴 Cookie</label>
+                <textarea id="${prefix}-pasteinput" rows="3" placeholder="name=value; name2=value2（或 JSON 数组）" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;"></textarea>
+                <button class="btn btn-secondary" id="${prefix}-pastesave" style="margin-top:6px;padding:4px 10px;">保存 Cookie</button>
+              </div>
+            </details>
+            <div style="margin-top:8px;">
+              <button class="btn btn-secondary" id="${prefix}-closebrowser" title="关掉此平台的浏览器窗口" style="font-size:11px;padding:3px 8px;">🗙 关闭浏览器</button>
             </div>
           </div>
-          <div class="panel-actions" style="margin-top:6px;">
-            <button class="btn btn-secondary" id="${prefix}-resume" style="display:none;">▶️ 从断点继续</button>
-          </div>
-
-          <!-- 更多操作（折叠） -->
-          <div style="margin-top:10px;">
-            <a href="#" id="${prefix}-moretoggle" style="font-size:12px;color:#666;">更多 ▾</a>
-          </div>
-          <div id="${prefix}-morebox" style="display:none;margin-top:6px;">
-            <div class="panel-actions">
-              <button class="btn btn-secondary" id="${prefix}-local" title="用本地算法重新提取，不调用模型">↺ 本地提取</button>
-              <button class="btn btn-secondary" id="${prefix}-savecopy" title="保存到 _social.json">💾 保存文案</button>
-              <button class="btn btn-secondary" id="${prefix}-copytext">📋 复制文案</button>
-              <button class="btn btn-secondary" id="${prefix}-closebrowser" title="关掉此平台的浏览器窗口">🗙 关闭</button>
-            </div>
-          </div>
-
-          <div class="social-progress" id="${prefix}-progress" style="margin-top:8px;color:#4ea1ff;font-size:12px;white-space:pre-wrap;overflow-y:auto;max-height:200px;"></div>
         </div>`;
 }
 
@@ -2274,20 +2289,27 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     .btn-secondary:hover { background: #666; }
     .btn-active    { background: #0078d4; color: #fff; }
     .btn-panel-open { filter: brightness(1.22) saturate(1.1); box-shadow: inset 0 0 0 2px rgba(255,255,255,0.5); }
-    .llm-profile-row { display:flex; align-items:center; gap:5px; padding:5px 7px; border-radius:5px; background:#252525; font-size:12px; }
-    .llm-profile-row.llm-profile-active { background:#1a2a1a; border:1px solid #3a6a3a; }
-    .llm-profile-dot { font-size:10px; color:#888; flex-shrink:0; }
-    .llm-profile-active .llm-profile-dot { color:#3ddc84; }
-    .llm-profile-name { font-weight:600; color:#ddd; flex-shrink:0; max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .llm-profile-model { color:#999; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .llm-profile-key { color:#888; flex-shrink:0; font-size:11px; }
-    .llm-profile-active .llm-profile-key { color:#3ddc84; }
-    .llm-profile-using { font-size:11px; color:#3ddc84; flex-shrink:0; }
-    .llm-profile-use { font-size:11px; padding:2px 7px; background:#0078d4; color:#fff; border:none; border-radius:3px; cursor:pointer; flex-shrink:0; }
+    /* ── LLM 配置卡片 ── */
+    .llm-profile-row {
+      background: #252525;
+      border: 1px solid #363636;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .llm-profile-row.llm-profile-active { background: #192819; border-color: #3a6a3a; }
+    .llm-profile-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
+    .llm-profile-name { font-weight:700; font-size:13px; color:#ddd; }
+    .llm-profile-active .llm-profile-name { color:#3ddc84; }
+    .llm-profile-badge { font-size:10px; padding:1px 6px; border-radius:10px; background:#2a4a2a; color:#3ddc84; }
+    .llm-profile-meta { color:#777; font-size:11px; margin-bottom:6px; line-height:1.5; }
+    .llm-profile-actions { display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
+    .llm-profile-use { font-size:11px; padding:2px 10px; background:#0078d4; color:#fff; border:none; border-radius:4px; cursor:pointer; }
     .llm-profile-use:hover { background:#005fa3; }
-    .llm-profile-edit { font-size:11px; padding:2px 6px; background:#444; color:#ddd; border:none; border-radius:3px; cursor:pointer; flex-shrink:0; }
-    .llm-profile-edit:hover { background:#555; }
-    .llm-profile-del { font-size:13px; padding:1px 5px; background:none; color:#666; border:none; cursor:pointer; flex-shrink:0; line-height:1; }
+    .llm-profile-edit { font-size:11px; padding:2px 8px; background:#3a3a3a; color:#ccc; border:none; border-radius:4px; cursor:pointer; }
+    .llm-profile-edit:hover { background:#4a4a4a; }
+    .llm-profile-del { font-size:12px; padding:2px 6px; background:none; color:#666; border:none; cursor:pointer; }
     .llm-profile-del:hover { color:#ff6b6b; }
     .btn-upload    { background: #f06529; color: #fff; }
     .btn-upload:hover    { background: #d4551f; }
@@ -2367,43 +2389,72 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       width: 2px; height: 40px; background: #555; border-radius: 2px;
     }
     .xhs-panel .resize-handle:hover::after { background: #0078d4; }
-    /* ── XHS 折叠区公共 ── */
-    .xhs-settings-arrow { display: inline-block; transition: transform .18s; font-size: 9px; color: #666; }
-    details[open] .xhs-settings-arrow { transform: rotate(90deg); }
+    /* ── XHS 参数网格 ── */
     .xhs-param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .xhs-param-grid > div > label { font-size: 11px !important; color: #999 !important; margin: 0 0 3px !important; }
     .xhs-param-grid > div > input { width: 100%; }
-    #xhs-settings-details > summary,
-    #xhs-preview-details > summary { border-radius: 5px; list-style: none; user-select: none; }
-    #xhs-settings-details > summary::-webkit-details-marker,
-    #xhs-preview-details > summary::-webkit-details-marker { display: none; }
-    #xhs-settings-details[open] > summary,
-    #xhs-preview-details[open] > summary { border-radius: 5px 5px 0 0; }
-    /* ── 模块卡片 (XHS / Twitter 各分区) ── */
-    .section-card {
+    /* ── 三大功能区块 ── */
+    .section-block {
       background: #272727;
-      border: 1px solid #393939;
-      border-radius: 6px;
-      padding: 10px;
-      margin-bottom: 8px;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
     }
-    .section-card.c-red    { border-left: 3px solid #ff2442; }
-    .section-card.c-blue   { border-left: 3px solid #4ea1ff; }
-    .section-card.c-amber  { border-left: 3px solid #ffb020; }
-    .section-card.c-muted  { border-left: 3px solid #4a4a4a; }
-    .section-card-title {
+    .section-block input[type=text],
+    .section-block input[type=number],
+    .section-block input[type=password],
+    .section-block textarea,
+    .section-block select {
+      background: #313131;
+      border-color: #484848;
+    }
+    .section-block-title {
       font-size: 10px;
+      font-weight: 700;
       color: #666;
-      letter-spacing: .7px;
+      letter-spacing: 0.8px;
       text-transform: uppercase;
-      margin: 0 0 8px;
-      font-weight: 600;
+      margin: 0 0 12px;
     }
-    /* backward-compat aliases */
-    .social-section { background: #272727; border: 1px solid #393939; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
-    .social-section.s-blue  { border-left: 3px solid #4ea1ff; }
-    .social-section.s-muted { border-left: 3px solid #4a4a4a; }
-    .social-section-title { font-size: 10px; color: #666; letter-spacing: .7px; text-transform: uppercase; margin: 0 0 8px; font-weight: 600; }
+    /* ── 区块内折叠条 ── */
+    details.section-details > summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 0;
+      font-size: 12px;
+      color: #666;
+      user-select: none;
+    }
+    details.section-details > summary::-webkit-details-marker { display: none; }
+    details.section-details > summary:hover { color: #999; }
+    .section-details-body {
+      margin-top: 8px;
+      padding-top: 10px;
+      border-top: 1px solid #2e2e2e;
+    }
+    .toggle-arrow {
+      font-size: 9px;
+      display: inline-block;
+      transition: transform .15s;
+      flex-shrink: 0;
+    }
+    details.section-details[open] > summary .toggle-arrow { transform: rotate(90deg); }
+    /* ── Ghost 按钮 ── */
+    .btn-ghost {
+      background: none;
+      border: none;
+      color: #666;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 0;
+      line-height: 1.4;
+    }
+    .btn-ghost:hover { color: #aaa; }
+    .btn-ghost.btn-ghost-blue { color: #4ea1ff; }
+    .btn-ghost.btn-ghost-blue:hover { color: #7db8ff; }
     .side-panel-header {
       padding: 12px 16px;
       font-size: 13px;
@@ -2430,6 +2481,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       flex: 1;
       overflow-y: auto;
       padding: 16px;
+      background: #161616;
     }
     label {
       display: block;
@@ -3202,65 +3254,55 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       <div class="side-panel-header">📸 导出小红书<button class="panel-close-btn" data-close-panel="xhs-panel" data-close-state="xhsPanelOpen">×</button></div>
       <div class="side-panel-body">
 
-        <!-- ① 导出模式卡片 -->
-        <div class="section-card c-red" style="margin-bottom:10px;">
-          <div class="section-card-title">导出模式</div>
-          <select id="xhs-export-mode" style="width:100%;padding:6px 8px;background:#1e1e1e;color:#eee;border:1px solid #555;border-radius:4px;font-size:13px;">
+        <!-- ① 导出区块 -->
+        <div class="section-block">
+          <div class="section-block-title">🎨 导出</div>
+          <select id="xhs-export-mode" style="width:100%;padding:6px 8px;background:#2d2d2d;color:#eee;border:1px solid #444;border-radius:4px;font-size:13px;outline:none;">
             <option value="classic"${xhsExportMode === 'classic' ? ' selected' : ''}>默认 HTML 页面截图</option>
             <option value="adaptive"${xhsExportMode === 'adaptive' ? ' selected' : ''}>手机自适应截图</option>
           </select>
-          <p class="hint" id="xhs-mode-hint" style="margin:6px 0 0;line-height:1.4;"></p>
-        </div>
-
-        <!-- ② 主操作按钮 -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
-          <button class="btn btn-xhs" id="btn-xhs-python" title="生成预览图，不保存到项目目录">📸 生成预览</button>
-          <button class="btn btn-xhs" id="btn-xhs-export-all" title="生成并保存到 MD 同名 _xhs 目录">💾 一键导出</button>
-        </div>
-
-        <!-- ③ 可折叠参数区 -->
-        <details id="xhs-settings-details" style="margin-bottom:10px;border:1px solid #393939;border-radius:5px;">
-          <summary style="cursor:pointer;padding:6px 10px;background:#242424;display:flex;align-items:center;gap:6px;font-size:12px;color:#999;">
-            <span class="xhs-settings-arrow">▶</span>
-            <span>参数设置</span>
-            <span style="margin-left:auto;display:flex;gap:4px;">
-              <button class="btn btn-secondary" id="btn-xhs-save-defaults" onclick="event.stopPropagation()" style="padding:2px 8px;font-size:11px;" title="将当前参数保存为该模式的默认值">★ 设为默认</button>
-              <button class="btn btn-secondary" id="btn-xhs-reset" onclick="event.stopPropagation()" style="padding:2px 8px;font-size:11px;" title="恢复为系统出厂参数">↺ 出厂值</button>
-            </span>
-          </summary>
-          <div style="padding:10px;background:#252525;border-radius:0 0 5px 5px;">
-            <div style="font-size:10px;color:#666;letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px;">图片尺寸</div>
-            <div class="xhs-param-grid" style="margin-bottom:10px;">
-              <div><label>宽度（px）</label><input type="number" id="xhs-width" value="1080" min="600" max="2000"></div>
-              <div><label>最大高度（px）</label><input type="number" id="xhs-height" value="1440" min="400" max="4000"></div>
-            </div>
-            <div style="font-size:10px;color:#666;letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px;">内容密度</div>
-            <label id="xhs-density-label">字体缩放（%）</label>
-            <input type="number" id="xhs-density" value="${xhsExportMode === 'adaptive' ? '36' : '100'}" min="${xhsExportMode === 'adaptive' ? '20' : '60'}" max="${xhsExportMode === 'adaptive' ? '60' : '200'}" step="${xhsExportMode === 'adaptive' ? '1' : '5'}">
-            <p class="hint" id="xhs-density-hint" style="margin:4px 0 10px;line-height:1.4;"></p>
-            <div style="font-size:10px;color:#666;letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px;">裁切参数</div>
-            <div class="xhs-param-grid">
-              <div><label>内边距（px）</label><input type="number" id="xhs-padding" value="40" min="0" max="200"></div>
-              <div><label>背景容差（0-100）</label><input type="number" id="xhs-tolerance" value="15" min="0" max="100"></div>
-            </div>
+          <p class="hint" id="xhs-mode-hint" style="margin:6px 0 10px;line-height:1.4;"></p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+            <button class="btn btn-secondary" id="btn-xhs-python" title="生成预览图，不保存到项目目录">📸 生成预览</button>
+            <button class="btn btn-secondary" id="btn-xhs-export-all" title="生成并保存到 MD 同名 _xhs 目录">💾 一键导出</button>
           </div>
-        </details>
 
-        <!-- ④ 可折叠预览图区 -->
-        <details id="xhs-preview-details" style="margin-bottom:4px;border:1px solid #393939;border-radius:5px;">
-          <summary style="cursor:pointer;padding:6px 10px;background:#242424;display:flex;align-items:center;gap:6px;font-size:12px;color:#999;">
-            <span class="xhs-settings-arrow">▶</span>
-            <span>预览图</span><span id="xhs-preview-count" style="color:#666;"></span>
-          </summary>
-          <div id="xhs-output" style="background:#1e1e1e;border-radius:0 0 5px 5px;padding:4px;"></div>
-        </details>
+          <!-- 参数设置（折叠） -->
+          <details class="section-details" id="xhs-settings-details">
+            <summary>
+              ⚙ 参数设置
+              <span style="margin-left:auto;display:flex;gap:4px;align-items:center;">
+                <button class="btn btn-secondary" id="btn-xhs-save-defaults" onclick="event.stopPropagation()" style="padding:2px 8px;font-size:11px;" title="将当前参数保存为该模式的默认值">★ 设为默认</button>
+                <button class="btn btn-secondary" id="btn-xhs-reset" onclick="event.stopPropagation()" style="padding:2px 8px;font-size:11px;" title="恢复为系统出厂参数">↺ 出厂值</button>
+                <span class="toggle-arrow">▶</span>
+              </span>
+            </summary>
+            <div class="section-details-body">
+              <div class="xhs-param-grid" style="margin-bottom:10px;">
+                <div><label>宽度（px）</label><input type="number" id="xhs-width" value="1080" min="600" max="2000"></div>
+                <div><label>最大高度（px）</label><input type="number" id="xhs-height" value="1440" min="400" max="4000"></div>
+              </div>
+              <label id="xhs-density-label">字体缩放（%）</label>
+              <input type="number" id="xhs-density" value="${xhsExportMode === 'adaptive' ? '36' : '100'}" min="${xhsExportMode === 'adaptive' ? '20' : '60'}" max="${xhsExportMode === 'adaptive' ? '60' : '200'}" step="${xhsExportMode === 'adaptive' ? '1' : '5'}">
+              <p class="hint" id="xhs-density-hint" style="margin:4px 0 10px;line-height:1.4;"></p>
+              <div class="xhs-param-grid">
+                <div><label>内边距（px）</label><input type="number" id="xhs-padding" value="40" min="0" max="200"></div>
+                <div><label>背景容差（0-100）</label><input type="number" id="xhs-tolerance" value="15" min="0" max="100"></div>
+              </div>
+            </div>
+          </details>
 
-        <!-- ⑤ 文案 & 发布 -->
-        <div style="margin:14px 0 10px;display:flex;align-items:center;gap:8px;">
-          <div style="flex:1;height:1px;background:#393939;"></div>
-          <span style="font-size:11px;color:#777;white-space:nowrap;letter-spacing:.5px;">文案 &amp; 发布</span>
-          <div style="flex:1;height:1px;background:#393939;"></div>
+          <!-- 预览图（折叠，固定高度） -->
+          <details class="section-details" id="xhs-preview-details">
+            <summary>
+              🖼 预览图 <span id="xhs-preview-count" style="color:#888;font-weight:normal;font-size:11px;margin-left:2px;"></span>
+              <span class="toggle-arrow" style="margin-left:auto;">▶</span>
+            </summary>
+            <div id="xhs-output" style="max-height:300px;overflow-y:auto;margin-top:8px;padding-top:10px;border-top:1px solid #2e2e2e;"></div>
+          </details>
         </div>
+
+        <!-- ② 文案 & 账号发布 -->
         ${socialBlockHtml('xiaohongshu', 'xhs-social', '小红书', 20,
           '发布用「一键导出」生成的长图作配图。默认停在发布前，核对无误后你点页面里的「发布」即可。')}
       </div>
@@ -3271,11 +3313,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       <div class="resize-handle" id="twitter-resize-handle"></div>
       <div class="side-panel-header">🐦 发布 Twitter<button class="panel-close-btn" data-close-panel="twitter-panel" data-close-state="twitterPanelOpen">×</button></div>
       <div class="side-panel-body">
-        <div class="section-card c-blue" style="margin-bottom:10px;">
-          <p style="margin:0;font-size:12px;color:#aaa;line-height:1.5;">生成中文推文，注入 Cookie 用真实浏览器自动发布。配图复用「导出小红书」生成的长图（最多 4 张）。</p>
-        </div>
         ${socialBlockHtml('twitter', 'tw-social', 'Twitter', 0,
-          '推文正文会自动拼上标签和全文链接，并压到 280 字以内。默认停在发帖前，核对无误后你点页面里的「发帖」。')}
+          '推文正文会自动拼上标签和全文链接，并压到 280 字以内。默认停在发帖前，核对无误后你点页面里的「发帖」。配图复用「导出小红书」生成的长图（最多 4 张）。')}
       </div>
     </div>
 
@@ -3443,18 +3482,16 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     <div class="side-panel" id="llm-config-panel">
       <div class="side-panel-header">⚙️ LLM 配置<button class="panel-close-btn" data-close-panel="llm-config-panel" data-close-state="llmConfigPanelOpen">×</button></div>
       <div class="side-panel-body">
-        <p class="hint">配置后，AI 生成文案（小红书/Twitter）和 PPT AI 改写功能均可使用。API Key 安全存入系统钥匙串，不落明文。</p>
 
         <!-- 已保存的配置列表 -->
-        <div id="llm-profiles-section" style="display:none;margin-bottom:4px;">
-          <label style="margin-top:4px;">已保存的配置</label>
-          <div id="llm-profiles-list" style="margin-top:6px;display:flex;flex-direction:column;gap:4px;"></div>
-          <div style="margin:12px 0 4px;border-top:1px solid #383838;"></div>
+        <div id="llm-profiles-section" style="display:none;margin-bottom:16px;">
+          <div style="font-size:10px;font-weight:700;color:#666;letter-spacing:.8px;text-transform:uppercase;margin-bottom:8px;">已保存的配置</div>
+          <div id="llm-profiles-list"></div>
         </div>
 
         <!-- 添加 / 修改表单 -->
-        <label id="llm-form-label" style="margin-top:4px;font-size:11px;color:#888;">添加配置</label>
-        <label style="margin-top:6px;">快速预设</label>
+        <div style="font-size:10px;font-weight:700;color:#666;letter-spacing:.8px;text-transform:uppercase;margin-bottom:8px;" id="llm-form-label">添加配置</div>
+        <label style="margin-top:0;">快速预设</label>
         <select id="global-llm-preset" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;">
           <option value="">— 选择预设 —</option>
           <option value="deepseek">DeepSeek（便宜，中文好）</option>
@@ -3464,15 +3501,17 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           <option value="ollama">本地 Ollama（完全免费）</option>
           <option value="openai">OpenAI</option>
         </select>
-        <label style="margin-top:10px;">接口地址（OpenAI 兼容）</label>
+        <label style="margin-top:10px;">配置名（可重命名，如"OpenRouter 免费"）</label>
+        <input type="text" id="global-llm-name" placeholder="留空则用预设名或接口地址">
+        <label style="margin-top:8px;">接口地址（OpenAI 兼容）</label>
         <input type="text" id="global-llm-base" placeholder="https://api.deepseek.com/v1">
         <label style="margin-top:8px;">模型名</label>
         <input type="text" id="global-llm-model" placeholder="deepseek-chat">
-        <label style="margin-top:8px;">API Key <span style="color:#3ddc84;">（存入系统钥匙串）</span></label>
+        <label style="margin-top:8px;">API Key <span style="color:#3ddc84;font-weight:normal;">（存入系统钥匙串，不落明文）</span></label>
         <input type="password" id="global-llm-key" placeholder="留空则保持不变；本地 Ollama 无需填">
-        <div class="panel-actions" style="margin-top:12px;">
-          <button class="btn btn-primary" id="global-llm-save">保存并使用</button>
-          <button class="btn btn-secondary" id="global-llm-test">测试连接</button>
+        <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="global-llm-save" style="flex:1;">保存并使用</button>
+          <button class="btn btn-secondary" id="global-llm-test">测试</button>
           <button class="btn btn-secondary" id="global-llm-clear" title="清除当前配置的 API Key">清除 Key</button>
         </div>
         <div id="global-llm-result" style="margin-top:8px;font-size:12px;color:#4fc3f7;"></div>
@@ -4155,16 +4194,19 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       const wasOpen = panelState.llmConfigPanelOpen;
       togglePanel('llm-config-panel', 'llmConfigPanelOpen', _allPanels.filter(p => p.panelId !== 'llm-config-panel'));
       if (!wasOpen) {
+        window._m2a_formTouched = false;
         vscode.postMessage({ type: 'llmGetConfig' });
       }
     });
     document.getElementById('global-llm-save').addEventListener('click', () => {
-      const baseUrl = (document.getElementById('global-llm-base') || {}).value || '';
-      const model   = (document.getElementById('global-llm-model') || {}).value || '';
-      const apiKey  = (document.getElementById('global-llm-key') || {}).value || undefined;
-      const preset  = (document.getElementById('global-llm-preset') || {}).value || '';
-      const profileId = preset || 'custom';
-      vscode.postMessage({ type: 'llmSaveConfig', baseUrl, model, apiKey, profileId, profileName: preset || baseUrl });
+      const baseUrl      = (document.getElementById('global-llm-base')  || {}).value || '';
+      const model        = (document.getElementById('global-llm-model') || {}).value || '';
+      const apiKey       = (document.getElementById('global-llm-key')   || {}).value || undefined;
+      const preset       = (document.getElementById('global-llm-preset')|| {}).value || '';
+      const customName   = (document.getElementById('global-llm-name')  || {}).value.trim();
+      const profileId    = preset || 'custom';
+      const profileName  = customName || preset || baseUrl;
+      vscode.postMessage({ type: 'llmSaveConfig', baseUrl, model, apiKey, profileId, profileName });
     });
     document.getElementById('global-llm-test').addEventListener('click', () => {
       const result = document.getElementById('global-llm-result');
@@ -5185,18 +5227,30 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       custom:     { name:'自定义', baseUrl:'', model:'', note:'' },
     };
 
-    // 预设下拉切换：自动填入接口地址和模型名
+    // 预设下拉切换：自动填入接口地址和模型名（优先使用已保存的该预设配置，否则用预设默认值）
     (function(){
       const sel = document.getElementById('global-llm-preset');
       if (!sel) return;
       sel.addEventListener('change', (e) => {
-        const p = PRESETS[e.target.value];
+        window._m2a_formTouched = true;
+        const presetKey = e.target.value;
+        const p = PRESETS[presetKey];
         if (!p) return;
         const base   = document.getElementById('global-llm-base');
         const model  = document.getElementById('global-llm-model');
+        const nameEl = document.getElementById('global-llm-name');
         const result = document.getElementById('global-llm-result');
-        if (base)   base.value   = p.baseUrl;
-        if (model)  model.value  = p.model;
+        // 优先使用已保存的该预设配置（上一次的配置）
+        const saved = (_llmProfilesCache || []).find(function(s){ return s.id === presetKey; });
+        if (saved) {
+          if (base)   base.value   = saved.baseUrl || p.baseUrl;
+          if (model)  model.value  = saved.model   || p.model;
+          if (nameEl) nameEl.value = saved.name    || '';
+        } else {
+          if (base)   base.value   = p.baseUrl;
+          if (model)  model.value  = p.model;
+          if (nameEl) nameEl.value = p.name || '';
+        }
         if (result) result.textContent = p.note || '';
       });
     })();
@@ -5221,23 +5275,30 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       if (!section || !list) return;
       if (!profiles || !profiles.length) { section.style.display = 'none'; return; }
       section.style.display = '';
-      if (formLbl) formLbl.textContent = activeId ? '修改当前配置' : '添加配置';
+      if (formLbl) formLbl.textContent = activeId ? '修改配置' : '添加配置';
       list.innerHTML = profiles.map(function(p) {
         const isActive = p.id === activeId;
-        const keyLabel = p.hasKey ? '✓ Key 已存' : (p.keyOptional ? '本地免 Key' : '⚠ 无 Key');
-        const modelShort = (p.model || '').split('/').pop();
+        const keyLabel = p.hasKey ? '✓ Key 已存' : (p.keyOptional ? '免 Key（本地）' : '⚠ 无 Key');
+        const keyColor = p.hasKey ? '#3ddc84' : (p.keyOptional ? '#4ea1ff' : '#ffb020');
+        const modelShort = (p.model || '').split('/').pop().slice(0, 28);
         const activeCls = isActive ? ' llm-profile-active' : '';
         const useOrActive = isActive
-          ? '<span class="llm-profile-using">使用中</span>'
-          : '<button class="llm-profile-use" data-pid="' + p.id + '">使用</button>';
+          ? '<span class="llm-profile-badge">使用中</span>'
+          : '<button class="llm-profile-use" data-pid="' + p.id + '">切换使用</button>';
         return '<div class="llm-profile-row' + activeCls + '" data-pid="' + p.id + '">'
-          + '<span class="llm-profile-dot">' + (isActive ? '●' : '○') + '</span>'
-          + '<span class="llm-profile-name" title="' + (p.baseUrl||'') + '">' + (p.name||p.id) + '</span>'
-          + '<span class="llm-profile-model">' + modelShort + '</span>'
-          + '<span class="llm-profile-key">' + keyLabel + '</span>'
+          + '<div class="llm-profile-header">'
+          + '<span class="llm-profile-name">' + (p.name || p.id) + '</span>'
           + useOrActive
-          + '<button class="llm-profile-edit" data-pid="' + p.id + '" title="加载到编辑框">编辑</button>'
-          + '<button class="llm-profile-del" data-pid="' + p.id + '" title="删除">×</button>'
+          + '</div>'
+          + '<div class="llm-profile-meta">'
+          + (modelShort || '—') + '&nbsp;&nbsp;<span style="color:#555;">|</span>&nbsp;&nbsp;'
+          + ((p.baseUrl||'').split('://').pop().split('/')[0])
+          + '</div>'
+          + '<div class="llm-profile-actions">'
+          + '<span style="font-size:11px;color:' + keyColor + ';">' + keyLabel + '</span>'
+          + '<button class="llm-profile-edit" data-pid="' + p.id + '">编辑 / 重命名</button>'
+          + '<button class="llm-profile-del" data-pid="' + p.id + '" title="删除">🗑</button>'
+          + '</div>'
           + '</div>';
       }).join('');
       list.querySelectorAll('.llm-profile-use').forEach(function(btn) {
@@ -5250,12 +5311,16 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           const pid = btn.dataset.pid;
           const full = (_llmProfilesCache || []).find(function(p){ return p.id === pid; });
           if (!full) return;
-          const base  = $('global-llm-base');
-          const mdl   = $('global-llm-model');
-          const psel  = $('global-llm-preset');
-          if (base)  base.value  = full.baseUrl;
-          if (mdl)   mdl.value   = full.model;
-          if (psel)  psel.value  = Object.prototype.hasOwnProperty.call(PRESETS, pid) ? pid : '';
+          const nameEl = $('global-llm-name');
+          const base   = $('global-llm-base');
+          const mdl    = $('global-llm-model');
+          const psel   = $('global-llm-preset');
+          if (nameEl) nameEl.value = full.name || '';
+          if (base)   base.value  = full.baseUrl || '';
+          if (mdl)    mdl.value   = full.model || '';
+          if (psel)   psel.value  = Object.prototype.hasOwnProperty.call(PRESETS, pid) ? pid : '';
+          const nameInput = $('global-llm-name');
+          if (nameInput) { nameInput.focus(); nameInput.scrollIntoView({ behavior:'smooth', block:'center' }); }
         });
       });
       list.querySelectorAll('.llm-profile-del').forEach(function(btn) {
@@ -5272,12 +5337,25 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     function applyLlmStateGlobal(cfg, opts){
       if(!cfg) return;
       _llmProfilesCache = cfg.profiles || [];
-      // 只在面板初次加载时（opts.init）才回填表单，避免覆盖用户正在编辑的内容
-      if (opts && opts.init) {
-        const base  = $('global-llm-base');
-        const model = $('global-llm-model');
-        if (base)  base.value  = cfg.baseUrl || '';
-        if (model) model.value = cfg.model   || '';
+      const profileChanged = cfg.activeProfile && cfg.activeProfile !== _activeProfileId;
+      // init：面板初次打开，只要用户还没手动改过预设就回填；profileChanged：切换配置始终回填
+      const shouldFill = (opts && opts.init && !window._m2a_formTouched) || profileChanged;
+      if (shouldFill) {
+        const base   = $('global-llm-base');
+        const model  = $('global-llm-model');
+        const nameEl = $('global-llm-name');
+        if (base)   base.value   = cfg.baseUrl || '';
+        if (model)  model.value  = cfg.model   || '';
+        // 找到激活配置的 name 填入配置名框
+        if (nameEl && cfg.activeProfile) {
+          const active = (cfg.profiles || []).find(function(p){ return p.id === cfg.activeProfile; });
+          if (active) nameEl.value = active.name || '';
+        }
+        // 同步预设选择框到当前激活配置
+        const psel = $('global-llm-preset');
+        if (psel && cfg.activeProfile) {
+          psel.value = Object.prototype.hasOwnProperty.call(PRESETS, cfg.activeProfile) ? cfg.activeProfile : '';
+        }
       }
       renderLlmProfiles(cfg.profiles, cfg.activeProfile);
     }
@@ -5641,6 +5719,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         // llmConfig = 面板初次打开，允许回填表单；llmConfigSaved = 操作后刷新，只更新列表
         applyLlmStateGlobal(msg.llm, { init: msg.type==='llmConfig' });
         if(msg.type==='llmConfigSaved'){
+          window._m2a_formTouched = false;
           const gr=$('global-llm-result');
           if(gr){ gr.style.color='#3ddc84'; gr.textContent='✅ 已保存'; }
           const gk=$('global-llm-key'); if(gk) gk.value='';
