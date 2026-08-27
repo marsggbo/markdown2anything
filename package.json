@@ -2,7 +2,7 @@
   "name": "markdown2anything",
   "displayName": "Markdown2Anything — 一篇 Markdown 一键发到微信/知乎/小红书/Twitter",
   "description": "写完一篇 Markdown，一键发布到微信公众号、知乎、小红书、Twitter(X)：自动截长图、AI 生成平台文案与串推、自动传图填字。支持 LaTeX 公式、10 套主题、实时预览。",
-  "version": "3.1.0",
+  "version": "3.3.5",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",
@@ -172,6 +172,21 @@
           ],
           "default": "classic",
           "description": "小红书图片导出模式。classic：保留当前主题样式；adaptive：使用适合 3:4 手机图片阅读的大字体排版。"
+        },
+        "markdown2anything.xhs.adaptiveUseTheme": {
+          "type": "boolean",
+          "default": true,
+          "description": "手机自适应截图是否跟随预览器主题色。开启则自动使用当前主题的强调色，关闭则固定小红书红 #ff2442。"
+        },
+        "markdown2anything.cover.imageModel": {
+          "type": "string",
+          "default": "",
+          "description": "封面生图模型（调 /images/generations）。为空则复用 llm.model。例：gpt-image-1 / dall-e-3"
+        },
+        "markdown2anything.cover.imageSize": {
+          "type": "string",
+          "default": "1024x1536",
+          "description": "封面生图尺寸，3:4 竖版推荐 1024x1536 / 1080x1440"
         },
         "markdown2anything.publish.headless": {
           "type": "boolean",

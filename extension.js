@@ -3,6 +3,7 @@
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const https = require('https');
 
 const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtmlByMode } = require('./lib/converter');
@@ -10,6 +11,8 @@ const { THEMES, DEFAULT_THEME_ID, getTheme } = require('./lib/themes');
 const zhihu = require('./lib/zhihu');
 const llm = require('./lib/llm');
 const social = require('./lib/social');
+const cover = require('./lib/cover');
+const coverLlm = require('./lib/cover-llm');
 const extract = require('./lib/extract');
 const matter = require('gray-matter');
 const pandocManager = require('./lib/pandoc-manager');
@@ -395,8 +398,10 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       const os = require('os');
       const { width = 1080, height = 1440, padding = 40, bg = '#ffffff', autoExport = false, mode = 'classic', density = null } = msg;
       // density 语义：adaptive 模式 → 正文字号(px)；classic 模式 → 字体缩放(%)
+      const cfgAdaptive = vscode.workspace.getConfiguration('markdown2anything');
+      const useThemeAccent = cfgAdaptive.get('xhs.adaptiveUseTheme', true);
       const renderOpts = mode === 'adaptive'
-        ? { fontSize:  density != null ? density : 36  }
+        ? { fontSize:  density != null ? density : 36, useThemeAccent }
         : { fontScale: density != null ? density : 100 };
 
       // 生成独立渲染 HTML
@@ -561,6 +566,174 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       const mode = msg.mode === 'adaptive' ? 'adaptive' : 'classic';
       const cfg = vscode.workspace.getConfiguration('markdown2anything');
       await cfg.update('xhs.exportMode', mode, vscode.ConfigurationTarget.Global);
+      break;
+    }
+
+    case 'setXhsAdaptiveUseTheme': {
+      const cfg = vscode.workspace.getConfiguration('markdown2anything');
+      await cfg.update('xhs.adaptiveUseTheme', !!msg.enabled, vscode.ConfigurationTarget.Global);
+      break;
+    }
+
+    // ─── 封面生成 ───────────────────────────────────────────────
+    case 'coverGeneratePrompt': {
+      try {
+        const cfg = await getLlmConfig();
+        const meta = readArticleMeta(mdPath);
+        const title = (msg.title || meta.title || '').trim();
+        const rawAbstract = msg.abstract || '';
+        const result = await coverLlm.generateCoverPrompt({
+          title, abstract: rawAbstract, vibe: msg.vibe || '', instruction: msg.instruction || '', config: cfg,
+        });
+        panel.webview.postMessage({ type: 'coverPromptResult', ok: true, ...result });
+      } catch (e) {
+        panel.webview.postMessage({ type: 'coverPromptResult', ok: false, message: e.message });
+      }
+      break;
+    }
+
+    case 'coverGenerateImage': {
+      try {
+        const cfg = await getLlmConfig();
+        // 若配置了 cover.imageModel 则覆盖 model
+        const ccfg = vscode.workspace.getConfiguration('markdown2anything');
+        const imgModel = ccfg.get('cover.imageModel','').trim();
+        const imgSize = ccfg.get('cover.imageSize','1024x1536').trim() || '1024x1536';
+        const imgCfg = imgModel ? { ...cfg, model: imgModel } : cfg;
+        const { b64 } = await coverLlm.generateCoverImage({
+          prompt: msg.prompt, negativePrompt: msg.negativePrompt||'', config: imgCfg, size: imgSize,
+        });
+        // 保存到 md 同目录 _cover + 同步入全局历史（自动设为默认）
+        const base = path.basename(mdPath, path.extname(mdPath));
+        const dir = path.join(path.dirname(mdPath), `${base}_cover`);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir,{recursive:true});
+        const outPath = path.join(dir, `cover_bg_${Date.now()}.png`);
+        coverLlm.saveB64ToFile(b64, outPath);
+        const dataUrl = `data:image/png;base64,${b64}`;
+        try { coverSaveBgFromDataUrl(dataUrl, 'LLM_'+Date.now()); } catch(_){}
+        panel.webview.postMessage({ type: 'coverImageResult', ok: true, dataUrl, outPath });
+        // 推送最新历史
+        try {
+          const cfg2 = loadCoverConfig();
+          const list2 = cfg2.bgs.map(function(it){ return { id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) }; }).filter(function(x){return x.dataUrl;});
+          panel.webview.postMessage({ type:'coverHistory', bgs: list2, defaultBgId: cfg2.defaultBgId, titleState: cfg2.titleState||{x:50,y:50,fontSize:78,width:70} });
+        } catch(_){}
+      } catch (e) {
+        // 404 等表示不支持生图，降级为只给 prompt
+        panel.webview.postMessage({ type: 'coverImageResult', ok: false, message: e.message, needCopy: /404|not found|不支持/i.test(e.message) });
+      }
+      break;
+    }
+
+    case 'coverGenerate': {
+      // 脚本合成封面：标题 + 背景图 -> 1080x1440 PNG，位置/大小持久化
+      try {
+        const { spawn } = require('child_process');
+        const title = (msg.title || '').trim() || readArticleMeta(mdPath).title || '未命名封面';
+        const bgDataUrl = msg.bgDataUrl || msg.bg || '';
+        const tagline = msg.tagline || '';
+        let bgPath = '';
+        if (bgDataUrl && bgDataUrl.startsWith('data:')) {
+          const m = bgDataUrl.match(/^data:image\/\w+;base64,(.+)$/);
+          if (m) {
+            bgPath = path.join(os.tmpdir(), `m2a_cover_bg_${Date.now()}.png`);
+            fs.writeFileSync(bgPath, Buffer.from(m[1],'base64'));
+          }
+        } else if (bgDataUrl && !bgDataUrl.startsWith('http')) {
+          // 可能是 globalStorage 里的真实路径
+          if (bgDataUrl && fs.existsSync(bgDataUrl)) bgPath = bgDataUrl;
+          else bgPath = bgDataUrl;
+        }
+        const base = path.basename(mdPath, path.extname(mdPath));
+        const outDir = path.join(path.dirname(mdPath), `${base}_cover`);
+        if (!fs.existsSync(outDir)) fs.mkdirSync(outDir,{recursive:true});
+        const outPath = path.join(outDir, `cover_${Date.now()}.png`);
+        const scriptPath = path.join(extContext.extensionUri.fsPath, 'scripts', 'cover.js');
+        const args=[scriptPath, '--title', title, '--out', outPath, '--width','1080','--height','1440'];
+        if (bgPath) args.push('--bg', bgPath);
+        if (tagline) args.push('--tagline', tagline);
+        if (msg.titleState) args.push('--titleState', JSON.stringify(msg.titleState));
+        if (bgDataUrl && bgDataUrl.startsWith('http')) args.push('--bg', bgDataUrl);
+
+        const proc = spawn(process.execPath, args);
+        let stdout='';
+        proc.stdout.on('data', d=>{ stdout+=d.toString(); const l=d.toString().trim(); if(l.startsWith('INFO:')) panel.webview.postMessage({type:'coverProgress', message:l.slice(5)}); });
+        proc.stderr.on('data', d=>{ stdout+=d.toString(); });
+        proc.on('close', async (code)=>{
+          try{ if(bgPath && bgPath.includes(os.tmpdir()) && fs.existsSync(bgPath)) fs.unlinkSync(bgPath);}catch(_){}
+          if (code===2) {
+            panel.webview.postMessage({type:'coverProgress', message:'📥 首次使用，正在下载 Chromium...'});
+            await installChromium(panel);
+            const proc2=spawn(process.execPath, args);
+            let out2='';
+            proc2.stdout.on('data', d=>{ out2+=d.toString(); });
+            proc2.on('close', c2=>{
+              if(c2!==0){ panel.webview.postMessage({type:'coverResult', ok:false, message: out2.split('\n').find(l=>l.startsWith('ERROR:'))||'封面生成失败'}); return; }
+              const buf=fs.readFileSync(outPath);
+              panel.webview.postMessage({type:'coverResult', ok:true, dataUrl:`data:image/png;base64,${buf.toString('base64')}`, outPath});
+            });
+            return;
+          }
+          if(code!==0){ panel.webview.postMessage({type:'coverResult', ok:false, message: stdout.split('\n').find(l=>l.startsWith('ERROR:'))||'封面生成失败'}); return; }
+          const buf=fs.readFileSync(outPath);
+          panel.webview.postMessage({type:'coverResult', ok:true, dataUrl:`data:image/png;base64,${buf.toString('base64')}`, outPath});
+        });
+        proc.on('error', e=> panel.webview.postMessage({type:'coverResult', ok:false, message:e.message}));
+        panel.webview.postMessage({type:'coverProgress', message:'⏳ 正在合成封面...'});
+      } catch(e){ panel.webview.postMessage({type:'coverResult', ok:false, message:e.message}); }
+      break;
+    }
+
+    case 'coverGetHistory': {
+      try {
+        const cfg = loadCoverConfig();
+        const list = cfg.bgs.map(item=> ({ id:item.id, name:item.name, createdAt:item.createdAt, dataUrl: coverGetBgDataUrl(item) })).filter(x=>x.dataUrl);
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: cfg.titleState || { x:50, y:50, fontSize:78, width:70 } });
+      } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null, titleState:{x:50,y:50,fontSize:78,width:70} }); }
+      break;
+    }
+    case 'coverSaveBg': {
+      try {
+        const dataUrl = msg.dataUrl;
+        if (!dataUrl || !dataUrl.startsWith('data:')) throw new Error('请先选择图片');
+        const { item, cfg } = coverSaveBgFromDataUrl(dataUrl, msg.name||'');
+        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: cfg.titleState||{x:50,y:50,fontSize:78,width:70} });
+        panel.webview.postMessage({ type:'coverSaveBgDone', id:item.id, dataUrl: coverGetBgDataUrl(item) });
+      } catch(e){ panel.webview.postMessage({ type:'coverSaveBgDone', ok:false, message:e.message }); }
+      break;
+    }
+    case 'coverSetDefaultBg': {
+      try {
+        const cfg = loadCoverConfig();
+        if (cfg.bgs.some(b=>b.id===msg.id)) { cfg.defaultBgId = msg.id; saveCoverConfig(cfg); }
+        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: cfg.titleState||{x:50,y:50,fontSize:78,width:70} });
+      } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null }); }
+      break;
+    }
+    case 'coverDeleteBg': {
+      try {
+        const cfg = loadCoverConfig();
+        const idx = cfg.bgs.findIndex(b=>b.id===msg.id);
+        if (idx>=0) {
+          try{ fs.unlinkSync(cfg.bgs[idx].path); }catch(_){}
+          cfg.bgs.splice(idx,1);
+          if (cfg.defaultBgId===msg.id) cfg.defaultBgId = cfg.bgs[0]?.id||null;
+          saveCoverConfig(cfg);
+        }
+        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: cfg.titleState||{x:50,y:50,fontSize:78,width:70} });
+      } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null }); }
+      break;
+    }
+    case 'coverSaveTitleState': {
+      try {
+        const cfg = loadCoverConfig();
+        cfg.titleState = { x: Number(msg.x)||50, y: Number(msg.y)||50, fontSize: Number(msg.fontSize)||78, width: Number(msg.width)||70 };
+        saveCoverConfig(cfg);
+        panel.webview.postMessage({ type:'coverTitleStateSaved', titleState: cfg.titleState });
+      } catch(e){ panel.webview.postMessage({ type:'coverTitleStateSaved', ok:false, message:e.message }); }
       break;
     }
 
@@ -1408,6 +1581,66 @@ function saveSocialStore(mdPath, store) {
   }
 }
 
+// ─── 封面底图历史 & 标题状态（存在 globalStorage） ───────────────
+function getCoverStoreDir() {
+  try { return path.join(extContext.globalStorageUri.fsPath, 'cover'); } catch(_) { return path.join(os.tmpdir(), 'm2a_cover_store'); }
+}
+function ensureCoverStoreDir() {
+  const d = getCoverStoreDir();
+  if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+  const bgDir = path.join(d, 'bgs');
+  if (!fs.existsSync(bgDir)) fs.mkdirSync(bgDir, { recursive: true });
+  return d;
+}
+function getCoverConfigPath() { return path.join(getCoverStoreDir(), 'config.json'); }
+function loadCoverConfig() {
+  try {
+    const p = getCoverConfigPath();
+    if (fs.existsSync(p)) {
+      const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+      return { defaultBgId: j.defaultBgId || null, titleState: j.titleState || null, bgs: Array.isArray(j.bgs) ? j.bgs : [] };
+    }
+  } catch(_) {}
+  return { defaultBgId: null, titleState: null, bgs: [] };
+}
+function saveCoverConfig(cfg) {
+  try {
+    ensureCoverStoreDir();
+    fs.writeFileSync(getCoverConfigPath(), JSON.stringify({ defaultBgId: cfg.defaultBgId||null, titleState: cfg.titleState||null, bgs: cfg.bgs||[] }, null, 2)+'\n','utf8');
+  } catch(e){ log('保存封面配置失败: '+e.message); }
+}
+function coverBgFilePath(id, ext='png') { return path.join(getCoverStoreDir(), 'bgs', `${id}.${ext}`); }
+function coverSaveBgFromDataUrl(dataUrl, nameHint) {
+  ensureCoverStoreDir();
+  const m = String(dataUrl).match(/^data:image\/(\w+);base64,(.+)$/);
+  if (!m) throw new Error('无效的图片 dataUrl');
+  const ext = (m[1]==='jpeg'?'jpg':m[1]);
+  const b64 = m[2];
+  const id = Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,6);
+  const fp = coverBgFilePath(id, ext);
+  fs.writeFileSync(fp, Buffer.from(b64,'base64'));
+  const cfg = loadCoverConfig();
+  const item = { id, ext, name: (nameHint||'').slice(0,40) || `bg_${id}`, createdAt: new Date().toISOString(), path: fp };
+  cfg.bgs.unshift(item);
+  // 超过 20 张自动只保留最新 20
+  if (cfg.bgs.length>20) {
+    const old = cfg.bgs.splice(20);
+    for(const o of old) try{ fs.unlinkSync(o.path);}catch(_){}
+  }
+  cfg.defaultBgId = id;
+  saveCoverConfig(cfg);
+  return { item, cfg };
+}
+function coverGetBgDataUrl(item) {
+  try {
+    if (!item || !fs.existsSync(item.path)) return null;
+    const ext = item.ext||'png';
+    const mime = ext==='jpg'?'image/jpeg':`image/${ext}`;
+    const b64 = fs.readFileSync(item.path).toString('base64');
+    return `data:${mime};base64,${b64}`;
+  } catch(_){ return null; }
+}
+
 /** 新增一个版本（旧版本保留，可回切），返回新版本下标 */
 function addSocialVersion(mdPath, platform, content, source, link) {
   const store = loadSocialStore(mdPath);
@@ -1561,9 +1794,10 @@ function exportXhsImages(mdPath, panel, platform, retried = false, exportMode) {
 
     const cfg = vscode.workspace.getConfiguration('markdown2anything');
     const mode = exportMode || cfg.get('xhs.exportMode', 'classic');
+    const useThemeAccent = cfg.get('xhs.adaptiveUseTheme', true);
     const { bodyHtml } = renderMarkdown(mdPath);
     const theme = getTheme(currentThemeId);
-    const htmlContent = buildXhsRenderHtmlByMode(bodyHtml, path.dirname(mdPath), theme, mode);
+    const htmlContent = buildXhsRenderHtmlByMode(bodyHtml, path.dirname(mdPath), theme, mode, mode==='adaptive'?{useThemeAccent}:{ });
     const tmpHtml = path.join(os.tmpdir(), `markdown2anything_xhs_${Date.now()}.html`);
     const base = path.basename(mdPath, path.extname(mdPath));
     const outDir = path.join(path.dirname(mdPath), `${base}_xhs`);
@@ -2181,6 +2415,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
   const nonce = getNonce();
   const csp = webview.cspSource;
   const xhsExportMode = vscode.workspace.getConfiguration('markdown2anything').get('xhs.exportMode', 'classic');
+  const xhsAdaptiveUseTheme = vscode.workspace.getConfiguration('markdown2anything').get('xhs.adaptiveUseTheme', true);
 
   // KaTeX 资源 URI（从扩展的 node_modules 加载）
   const katexDistPath = path.join(extContext.extensionUri.fsPath, 'node_modules', 'katex', 'dist');
@@ -3039,6 +3274,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     <!-- 🎨 样式 -->
     <button class="btn btn-secondary" id="btn-style" title="自定义 CSS 样式">🎨 样式</button>
 
+    <!-- 🖼️ 封面 -->
+    <button class="btn btn-secondary" id="btn-cover" title="生成小红书封面（脚本固化 + LLM 生图）">🖼️ 封面</button>
+
     </div><!-- /toolbar-btn-row -->
   </div><!-- /toolbar -->
 
@@ -3257,10 +3495,14 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         <!-- ① 导出区块 -->
         <div class="section-block">
           <div class="section-block-title">🎨 导出</div>
-          <select id="xhs-export-mode" style="width:100%;padding:6px 8px;background:#2d2d2d;color:#eee;border:1px solid #444;border-radius:4px;font-size:13px;outline:none;">
+           <select id="xhs-export-mode" style="width:100%;padding:6px 8px;background:#2d2d2d;color:#eee;border:1px solid #444;border-radius:4px;font-size:13px;outline:none;">
             <option value="classic"${xhsExportMode === 'classic' ? ' selected' : ''}>默认 HTML 页面截图</option>
             <option value="adaptive"${xhsExportMode === 'adaptive' ? ' selected' : ''}>手机自适应截图</option>
           </select>
+          <label style="display:${xhsExportMode === 'adaptive' ? 'flex' : 'none'};align-items:center;gap:6px;margin:8px 0 0;font-size:12px;color:#aaa;cursor:pointer;" id="xhs-theme-row">
+            <input type="checkbox" id="xhs-adaptive-theme" ${xhsAdaptiveUseTheme ? 'checked' : ''} style="accent-color:#ff2442;"> 跟随预览主题色
+            <span style="font-size:11px;color:#666;">(关闭则固定小红书红)</span>
+          </label>
           <p class="hint" id="xhs-mode-hint" style="margin:6px 0 10px;line-height:1.4;"></p>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
             <button class="btn btn-secondary" id="btn-xhs-python" title="生成预览图，不保存到项目目录">📸 生成预览</button>
@@ -3305,6 +3547,85 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         <!-- ② 文案 & 账号发布 -->
         ${socialBlockHtml('xiaohongshu', 'xhs-social', '小红书', 20,
           '发布用「一键导出」生成的长图作配图。默认停在发布前，核对无误后你点页面里的「发布」即可。')}
+      </div>
+    </div>
+
+    <!-- 封面面板 -->
+    <div class="side-panel xhs-panel" id="cover-panel">
+      <div class="resize-handle" id="cover-resize-handle"></div>
+      <div class="side-panel-header">🖼️ 生成封面<button class="panel-close-btn" data-close-panel="cover-panel" data-close-state="coverPanelOpen">×</button></div>
+      <div class="side-panel-body">
+
+        <!-- 标题 + 可视化拖拽 -->
+        <div class="section-block">
+          <div class="section-block-title">✏️ 标题（可拖拽/缩放）</div>
+          <label style="margin-top:0;">封面标题 *</label>
+          <input type="text" id="cover-title" placeholder="自动取文章标题，可手动改" style="width:100%;box-sizing:border-box;">
+          <label>小字标语（可选）</label>
+          <input type="text" id="cover-tagline" placeholder="例：新书签售会 / AI · 技术分享" style="width:100%;box-sizing:border-box;">
+          <!-- 实时预览：1080x1440 等比缩放 0.25，所见即所得 -->
+          <div id="cover-preview-wrap" style="width:270px;height:360px;margin:10px auto;position:relative;overflow:hidden;border:1px solid #333;border-radius:8px;background:#FFF8E7;cursor:grab;user-select:none;">
+            <div id="cover-preview-inner" style="width:1080px;height:1440px;transform:scale(0.25);transform-origin:top left;position:absolute;left:0;top:0;background:#FFF8E7;">
+              <img id="cover-preview-bg" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;">
+              <div id="cover-draggable-title" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:70%;text-align:center;cursor:move;touch-action:none;">
+                <div id="cover-preview-title" style="font-family:'PingFang SC','Hiragino Sans GB','Alibaba PuHuiTi Heavy',system-ui,sans-serif;font-weight:900;line-height:1.28;color:#1A1A1A;word-break:break-word;-webkit-text-stroke:7px #fff;paint-order:stroke fill;text-shadow:0 2px 0 rgba(255,255,255,0.95), 0 10px 28px rgba(0,0,0,0.12);font-size:78px;">标题预览</div>
+                <div id="cover-preview-tagline" style="margin-top:16px;font-size:30px;font-weight:600;color:#3a3a3a;letter-spacing:0.12em;-webkit-text-stroke:4px #fff;paint-order:stroke fill;word-break:break-word;"></div>
+              </div>
+            </div>
+            <div id="cover-preview-hint" style="position:absolute;bottom:4px;left:50%;transform:translateX(-50%);font-size:9px;color:#fff;background:rgba(0,0,0,0.45);padding:2px 6px;border-radius:999px;pointer-events:none;">拖动标题 · 按住 Ctrl 滚轮缩放</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;margin-top:6px;">
+            <label style="flex:1;margin:0;font-size:11px;color:#999;">字号 <span id="cover-fontsize-val" style="color:#ccc;">78</span> <input type="range" id="cover-fontsize" min="28" max="120" value="78" style="width:100%;"></label>
+            <label style="flex:1;margin:0;font-size:11px;color:#999;">宽度 <span id="cover-width-val" style="color:#ccc;">70%</span> <input type="range" id="cover-width" min="50" max="92" value="70" style="width:100%;"></label>
+            <button class="btn btn-secondary" id="btn-cover-reset-pos" style="padding:4px 8px;font-size:11px;">↺ 居中</button>
+          </div>
+          <p class="hint" style="margin:4px 0 0;">拖动标题、滚轮/滑条调大小 → 点「确认排版」设为默认值 → 导出即为所见（1080×1440 高清）。</p>
+
+          <label style="margin-top:10px;">背景图（自动设为默认）</label>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input type="text" id="cover-bg" placeholder="粘贴图片 URL 或选本地文件" style="flex:1;box-sizing:border-box;">
+            <label class="btn btn-secondary" style="padding:5px 10px;cursor:pointer;margin:0;">选择<input type="file" id="cover-bg-file" accept="image/*" style="display:none;"></label>
+          </div>
+          <div id="cover-bg-history" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;max-height:120px;overflow-y:auto;"></div>
+          <p class="hint" style="margin:4px 0 0;">上传后自动设为默认，历史保留可切换，点 ✕ 删除。</p>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;">
+            <button class="btn btn-secondary" id="btn-cover-confirm" title="将当前拖拽位置/大小设为以后默认值">✓ 确认排版</button>
+            <button class="btn btn-primary" id="btn-cover-generate" title="用当前预览排版直出 1080×1440 高清图">⬇ 导出高清封面</button>
+          </div>
+          <div id="cover-progress" style="margin-top:8px;color:#4ea1ff;font-size:12px;white-space:pre-wrap;"></div>
+          <div id="cover-result" style="margin-top:10px;display:none;">
+            <img id="cover-result-img" style="width:100%;border-radius:8px;border:1px solid #333;cursor:zoom-in;">
+            <div style="display:flex;gap:6px;margin-top:6px;">
+              <button class="btn btn-secondary" id="btn-cover-save" style="flex:1;">💾 已自动保存</button>
+              <button class="btn btn-secondary" id="btn-cover-copy">📋 复制</button>
+            </div>
+            <p class="hint" id="cover-result-path" style="word-break:break-all;"></p>
+          </div>
+        </div>
+
+        <!-- LLM 生图 -->
+        <div class="section-block">
+          <div class="section-block-title">🤖 LLM 生背景（去标题）</div>
+          <p class="hint" style="margin-top:0;">有新策划时快速换背景：LLM 生成蜡笔小新+猪猪侠背景 prompt → 调生图 API 生成无字背景 → 再用上面按钮贴标题。</p>
+          <label>期望气质（可选）</label>
+          <input type="text" id="cover-vibe" placeholder="例：科技感 / 可爱 / 极简 / 暖粉" style="width:100%;box-sizing:border-box;">
+          <details class="section-details" id="cover-prompt-details">
+            <summary>指令 <span class="toggle-arrow">▶</span></summary>
+            <div class="section-details-body">
+              <textarea id="cover-instruction" rows="4" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:11px;" placeholder="留空用默认：蜡笔小新+猪猪侠，中央留白..."></textarea>
+            </div>
+          </details>
+          <div style="display:flex;gap:6px;margin-top:8px;">
+            <button class="btn btn-secondary" id="btn-cover-prompt" style="flex:1;">✨ 生成 Prompt</button>
+            <button class="btn btn-secondary" id="btn-cover-image" style="flex:1;">🎨 生成背景图</button>
+          </div>
+          <div id="cover-prompt-out" style="margin-top:8px;display:none;background:#111;border:1px solid #333;border-radius:6px;padding:8px;font-size:11px;color:#ccc;white-space:pre-wrap;word-break:break-word;"></div>
+          <div id="cover-bg-gen-preview" style="margin-top:8px;display:none;"><img id="cover-bg-gen-img" style="width:100%;border-radius:6px;border:1px solid #333;max-height:240px;object-fit:contain;background:#111;"></div>
+          <p class="hint" id="cover-llm-progress" style="margin-top:6px;color:#4ea1ff;white-space:pre-wrap;"></p>
+          <p class="hint">复用工具栏 ⚙️ LLM 配置的 baseUrl/model/key；生图模型可在设置里单独配 <code>cover.imageModel</code>。</p>
+        </div>
+
       </div>
     </div>
 
@@ -3539,7 +3860,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     let currentBodyHtml = '';
     let currentThemeBg = '#ffffff';
     // 用对象统一管理面板开关状态，避免 let 变量与 window 属性不同步的 bug
-    const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false, twitterPanelOpen: false, pptPanelOpen: false, wordPanelOpen: false, llmConfigPanelOpen: false };
+    const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false, twitterPanelOpen: false, pptPanelOpen: false, wordPanelOpen: false, llmConfigPanelOpen: false, coverPanelOpen: false };
 
     // 系统出厂默认值（恢复出厂用）
     const XHS_DEFAULTS          = { width: 1080, height: 1440, padding: 40, tolerance: 15, density: 100 };
@@ -3596,12 +3917,18 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     document.getElementById('xhs-export-mode').addEventListener('change', function() {
       const mode = getXhsExportMode();
       applyXhsModeDefaults(mode, true);
+      const row=document.getElementById('xhs-theme-row');
+      if(row) row.style.display = mode==='adaptive' ? 'flex' : 'none';
       window._xhsLastSlices = null;
       document.getElementById('xhs-output').innerHTML = '';
       const pd = document.getElementById('xhs-preview-details');
       if (pd) { pd.open = false; document.getElementById('xhs-preview-count').textContent = ''; }
       vscode.postMessage({ type: 'setXhsExportMode', mode });
     });
+    (function(){
+      const cb=document.getElementById('xhs-adaptive-theme');
+      if(cb) cb.addEventListener('change', ()=> vscode.postMessage({ type:'setXhsAdaptiveUseTheme', enabled: cb.checked }));
+    })();
     applyXhsModeDefaults(getXhsExportMode(), true);
 
     // ─── 工具函数 ───
@@ -3906,6 +4233,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         ['btn-toc',        'btn-toc',       panelState.tocPanelOpen],
         ['btn-style',      'btn-secondary', panelState.stylePanelOpen],
         ['btn-llm-config', 'btn-secondary', panelState.llmConfigPanelOpen],
+        ['btn-cover',      'btn-secondary', panelState.coverPanelOpen],
         ['btn-twitter',    'btn-twitter',   panelState.twitterPanelOpen],
         ['btn-dd-wechat',  'btn-primary',   panelState.uploadPanelOpen],
         ['btn-dd-zhihu',   'btn-zhihu',     panelState.zhihuPublishPanelOpen],
@@ -4154,7 +4482,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       {panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},
       {panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},
       {panelId:'twitter-panel',stateKey:'twitterPanelOpen'},{panelId:'ppt-panel',stateKey:'pptPanelOpen'},
-      {panelId:'word-panel',stateKey:'wordPanelOpen'},{panelId:'llm-config-panel',stateKey:'llmConfigPanelOpen'}
+      {panelId:'word-panel',stateKey:'wordPanelOpen'},{panelId:'llm-config-panel',stateKey:'llmConfigPanelOpen'},
+      {panelId:'cover-panel',stateKey:'coverPanelOpen'}
     ];
 
     // ─── 小红书 ───
@@ -4189,6 +4518,16 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       togglePanel('word-panel', 'wordPanelOpen', _allPanels.filter(p => p.panelId !== 'word-panel'));
     });
 
+    // ─── 封面 ───
+    document.getElementById('btn-cover').addEventListener('click', () => {
+      const wasOpen = panelState.coverPanelOpen;
+      togglePanel('cover-panel', 'coverPanelOpen', _allPanels.filter(p => p.panelId !== 'cover-panel'));
+      if (!wasOpen) {
+        const t = document.getElementById('cover-title');
+        if (t && !t.value && currentTitle) t.value = currentTitle;
+      }
+    });
+
     // ─── LLM 全局配置 ───
     document.getElementById('btn-llm-config').addEventListener('click', () => {
       const wasOpen = panelState.llmConfigPanelOpen;
@@ -4217,6 +4556,222 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       const preset = (document.getElementById('global-llm-preset') || {}).value || '';
       const profileId = preset || 'custom';
       vscode.postMessage({ type: 'llmSaveConfig', profileId, apiKey: '' });
+    });
+
+    // ─── 封面：拖拽/缩放/历史 + LLM ───
+    let _coverBgDataUrl = '';
+    let _coverLastPrompt = '';
+    let _coverTitleState = { x:50, y:50, fontSize:78, width:70 };
+    let _coverBgHistory = [];
+    function coverApplyPreview(){
+      const title=(document.getElementById('cover-title')||{}).value||currentTitle||'标题预览';
+      const tagline=(document.getElementById('cover-tagline')||{}).value||'';
+      const tEl=document.getElementById('cover-preview-title');
+      const tlEl=document.getElementById('cover-preview-tagline');
+      const wrap=document.getElementById('cover-draggable-title');
+      if(tEl) { tEl.textContent=title; tEl.style.fontSize=_coverTitleState.fontSize+'px'; }
+      if(tlEl) { tlEl.textContent=tagline; tlEl.style.display=tagline?'':'none'; }
+      if(wrap){
+        wrap.style.left=_coverTitleState.x+'%';
+        wrap.style.top=_coverTitleState.y+'%';
+        wrap.style.width=_coverTitleState.width+'%';
+        wrap.style.transform='translate(-50%,-50%)';
+      }
+      const fsVal=document.getElementById('cover-fontsize-val');
+      const wVal=document.getElementById('cover-width-val');
+      const fsInput=document.getElementById('cover-fontsize');
+      const wInput=document.getElementById('cover-width');
+      if(fsVal) fsVal.textContent=_coverTitleState.fontSize;
+      if(wVal) wVal.textContent=_coverTitleState.width+'%';
+      if(fsInput) fsInput.value=_coverTitleState.fontSize;
+      if(wInput) wInput.value=_coverTitleState.width;
+      const bgPrev=document.getElementById('cover-preview-bg');
+      if(bgPrev) {
+        if(_coverBgDataUrl) bgPrev.src=_coverBgDataUrl;
+        else bgPrev.removeAttribute('src');
+        bgPrev.style.display=_coverBgDataUrl?'':'none';
+      }
+    }
+    function coverSaveTitleStateDebounced(){
+      clearTimeout(coverSaveTitleStateDebounced._t);
+      coverSaveTitleStateDebounced._t=setTimeout(()=>{
+        vscode.postMessage({ type:'coverSaveTitleState', x:_coverTitleState.x, y:_coverTitleState.y, fontSize:_coverTitleState.fontSize, width:_coverTitleState.width });
+      }, 400);
+    }
+    function coverRenderHistory(list, defaultId){
+      const c=document.getElementById('cover-bg-history');
+      if(!c) return;
+      if(!list||!list.length){ c.innerHTML='<span style="font-size:11px;color:#666;">暂无历史，上传后自动保留</span>'; return; }
+      c.innerHTML=list.map(function(item){
+        const isDef=item.id===defaultId;
+        return '<div data-id="'+item.id+'" style="position:relative;width:72px;height:96px;border:2px solid '+(isDef?'#ff2442':'#333')+';border-radius:6px;overflow:hidden;cursor:pointer;background:#111;" title="'+(item.name||'')+'">'
+          +'<img src="'+item.dataUrl+'" style="width:100%;height:100%;object-fit:cover;">'
+          +'<button data-del="'+item.id+'" style="position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;border:none;background:rgba(0,0,0,0.65);color:#fff;font-size:10px;cursor:pointer;line-height:16px;">\u00d7</button>'
+          +(isDef?'<span style="position:absolute;bottom:0;left:0;right:0;background:rgba(255,36,66,0.9);color:#fff;font-size:8px;text-align:center;padding:1px 0;">默认</span>':'')
+          +'</div>';
+      }).join('');
+      c.querySelectorAll('[data-id]').forEach(function(el){
+        el.addEventListener('click', function(e){
+          if(e.target.hasAttribute('data-del')) return;
+          const id=el.getAttribute('data-id');
+          const it=list.find(function(x){return x.id===id;});
+          if(it){ _coverBgDataUrl=it.dataUrl; const inp=document.getElementById('cover-bg'); if(inp) inp.value='[历史] '+it.name; coverApplyPreview(); vscode.postMessage({type:'coverSetDefaultBg', id:id}); }
+        });
+      });
+      c.querySelectorAll('[data-del]').forEach(function(btn){
+        btn.addEventListener('click', function(e){
+          e.stopPropagation();
+          const id=btn.getAttribute('data-del');
+          vscode.postMessage({type:'coverDeleteBg', id:id});
+        });
+      });
+    }
+    // 拖拽
+    (function(){
+      const wrap=document.getElementById('cover-preview-wrap');
+      const drag=document.getElementById('cover-draggable-title');
+      if(!wrap||!drag) return;
+      let dragging=false, startX=0, startY=0, startLeft=0, startTop=0;
+      function getPos(e){
+        const rect=wrap.getBoundingClientRect();
+        const cx=(e.touches?e.touches[0].clientX:e.clientX);
+        const cy=(e.touches?e.touches[0].clientY:e.clientY);
+        return { cx:cx, cy:cy, rect:rect };
+      }
+      drag.addEventListener('mousedown', function(e){
+        dragging=true; drag.style.cursor='grabbing'; wrap.style.cursor='grabbing';
+        const p=getPos(e); startX=p.cx; startY=p.cy; startLeft=_coverTitleState.x; startTop=_coverTitleState.y;
+        e.preventDefault();
+      });
+      drag.addEventListener('touchstart', function(e){
+        dragging=true; const p=getPos(e); startX=p.cx; startY=p.cy; startLeft=_coverTitleState.x; startTop=_coverTitleState.y; e.preventDefault();
+      }, {passive:false});
+      window.addEventListener('mousemove', function(e){
+        if(!dragging) return;
+        const p=getPos(e);
+        const dx=(p.cx-startX)/p.rect.width*100;
+        const dy=(p.cy-startY)/p.rect.height*100;
+        _coverTitleState.x=Math.max(10, Math.min(90, startLeft+dx));
+        _coverTitleState.y=Math.max(10, Math.min(90, startTop+dy));
+        coverApplyPreview();
+      });
+      window.addEventListener('touchmove', function(e){
+        if(!dragging) return;
+        const p=getPos(e);
+        const dx=(p.cx-startX)/p.rect.width*100;
+        const dy=(p.cy-startY)/p.rect.height*100;
+        _coverTitleState.x=Math.max(10, Math.min(90, startLeft+dx));
+        _coverTitleState.y=Math.max(10, Math.min(90, startTop+dy));
+        coverApplyPreview(); e.preventDefault();
+      }, {passive:false});
+      window.addEventListener('mouseup', function(){ if(dragging){ dragging=false; drag.style.cursor='move'; wrap.style.cursor='grab'; } });
+      window.addEventListener('touchend', function(){ if(dragging){ dragging=false; } });
+      // 滚轮缩放字号：仅按住 Ctrl/Cmd 时生效，避免触控板双指滚动误触
+      wrap.addEventListener('wheel', function(e){
+        if(!e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        const delta=e.deltaY>0?-2:2;
+        _coverTitleState.fontSize=Math.max(28, Math.min(120, _coverTitleState.fontSize+delta));
+        coverApplyPreview();
+      }, {passive:false});
+    })();
+    // 标题/标语实时预览
+    ['cover-title','cover-tagline'].forEach(function(id){
+      const el=document.getElementById(id);
+      if(el) el.addEventListener('input', function(){ coverApplyPreview(); });
+    });
+    // 滑条
+    (function(){
+      const fs=document.getElementById('cover-fontsize');
+      const w=document.getElementById('cover-width');
+      if(fs) fs.addEventListener('input', function(){ _coverTitleState.fontSize=parseInt(fs.value,10)||78; coverApplyPreview(); });
+      if(w) w.addEventListener('input', function(){ _coverTitleState.width=parseInt(w.value,10)||70; coverApplyPreview(); });
+      const reset=document.getElementById('btn-cover-reset-pos');
+      if(reset) reset.addEventListener('click', function(){ _coverTitleState={x:50,y:50,fontSize:78,width:70}; coverApplyPreview(); });
+      const confirmBtn=document.getElementById('btn-cover-confirm');
+      if(confirmBtn) confirmBtn.addEventListener('click', function(){
+        vscode.postMessage({ type:'coverSaveTitleState', x:_coverTitleState.x, y:_coverTitleState.y, fontSize:_coverTitleState.fontSize, width:_coverTitleState.width });
+        showToast('✅ 排版已确认，将作为以后默认值','success');
+        confirmBtn.textContent='✓ 已确认';
+        setTimeout(function(){ confirmBtn.textContent='✓ 确认排版'; }, 1500);
+      });
+    })();
+    // 背景上传：自动设为默认并入历史
+    (function(){
+      const el=document.getElementById('cover-bg-file');
+      if(el) el.addEventListener('change', function(e){
+        const f=e.target.files&&e.target.files[0];
+        if(!f) return;
+        const reader=new FileReader();
+        reader.onload=function(){
+          const dataUrl=reader.result;
+          vscode.postMessage({ type:'coverSaveBg', dataUrl:dataUrl, name:f.name });
+          _coverBgDataUrl=dataUrl; coverApplyPreview();
+          const inp=document.getElementById('cover-bg'); if(inp) inp.value='[本地文件] '+f.name;
+        };
+        reader.readAsDataURL(f);
+        el.value='';
+      });
+      const bgInput=document.getElementById('cover-bg');
+      if(bgInput) bgInput.addEventListener('input', function(){
+        const v=bgInput.value.trim();
+        if(!v){ _coverBgDataUrl=''; coverApplyPreview(); return; }
+        if(v.startsWith('http')||v.startsWith('data:')){ _coverBgDataUrl=v; coverApplyPreview(); }
+      });
+    })();
+    // 封面面板打开时加载历史与默认排版
+    (function(){
+      const btn=document.getElementById('btn-cover');
+      if(btn) btn.addEventListener('click', function(){ setTimeout(function(){ vscode.postMessage({type:'coverGetHistory'}); }, 80); });
+      // 首次若已打开也拉一次
+      setTimeout(function(){ vscode.postMessage({type:'coverGetHistory'}); }, 800);
+    })();
+    document.getElementById('btn-cover-generate').addEventListener('click', function(){
+      const title=(document.getElementById('cover-title')||{}).value||currentTitle||'';
+      if(!title.trim()){ showToast('请填写封面标题','error'); return; }
+      const btn=document.getElementById('btn-cover-generate');
+      btn.disabled=true; btn.textContent='⏳ 合成中...';
+      document.getElementById('cover-progress').textContent='⏳ 正在合成封面...';
+      const tagline=(document.getElementById('cover-tagline')||{}).value||'';
+      let bg=_coverBgDataUrl|| (document.getElementById('cover-bg')||{}).value||'';
+      vscode.postMessage({ type:'coverGenerate', title:title, tagline:tagline, bgDataUrl:bg, titleState:_coverTitleState });
+    });
+    document.getElementById('btn-cover-copy').addEventListener('click', async function(){
+      const img=document.getElementById('cover-result-img');
+      if(!img||!img.src) return;
+      try{ await navigator.clipboard.writeText(img.src); showToast('已复制 data URL','success'); }catch(e){ showToast('复制失败','error'); }
+    });
+    (function(){
+      const img=document.getElementById('cover-result-img');
+      const genImg=document.getElementById('cover-bg-gen-img');
+      [img,genImg].forEach(function(el){
+        if(!el) return;
+        el.addEventListener('click', function(){
+          const lb=document.getElementById('xhs-lightbox');
+          const lbImg=document.getElementById('xhs-lightbox-img');
+          if(lb&&lbImg&&el.src){ lbImg.src=el.src; lb.classList.add('show'); }
+        });
+      });
+    })();
+    document.getElementById('btn-cover-prompt').addEventListener('click', function(){
+      const title=(document.getElementById('cover-title')||{}).value||currentTitle||'';
+      const vibe=(document.getElementById('cover-vibe')||{}).value||'';
+      const instruction=(document.getElementById('cover-instruction')||{}).value||'';
+      const btn=document.getElementById('btn-cover-prompt');
+      btn.disabled=true; btn.textContent='⏳ 生成中';
+      document.getElementById('cover-llm-progress').textContent='⏳ 正在生成 Prompt...';
+      const abstract=(currentBodyHtml||'').replace(/<[^>]+>/g,' ').slice(0,800);
+      vscode.postMessage({ type:'coverGeneratePrompt', title:title, abstract:abstract, vibe:vibe, instruction:instruction });
+    });
+    document.getElementById('btn-cover-image').addEventListener('click', function(){
+      let prompt=_coverLastPrompt;
+      const outEl=document.getElementById('cover-prompt-out');
+      if(!prompt && outEl && outEl.dataset.prompt) prompt=outEl.dataset.prompt;
+      if(!prompt){ showToast('请先生成 Prompt','error'); return; }
+      const btn=document.getElementById('btn-cover-image');
+      btn.disabled=true; btn.textContent='⏳ 生图中';
+      document.getElementById('cover-llm-progress').textContent='⏳ 正在生成背景图（无字）...';
+      vscode.postMessage({ type:'coverGenerateImage', prompt:prompt, negativePrompt:'' });
     });
 
     // ─── PPT 导出 ───
@@ -4502,7 +5057,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     });
 
     // ─── 接收 extension 消息 ───
-    window.addEventListener('message', ({ data: msg }) => {
+    window.addEventListener('message', async ({ data: msg }) => {
       switch (msg.type) {
         case 'update': {
           currentBodyHtml = msg.bodyHtml || '';
@@ -4518,6 +5073,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           // 填充标题输入框（如果为空）
           const titleInput = document.getElementById('input-title');
           if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
+          const coverTitleInput = document.getElementById('cover-title');
+          if (coverTitleInput && !coverTitleInput.value && currentTitle) { coverTitleInput.value = currentTitle; if(typeof coverApplyPreview==='function') try{ coverApplyPreview(); }catch(_){} }
           // 内容更新后同步重建目录
           if (panelState.tocPanelOpen) buildToc();
           break;
@@ -5011,6 +5568,98 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
             }
             res.style.display = 'block';
           }
+          break;
+        }
+
+        case 'coverProgress': {
+          const el=document.getElementById('cover-progress');
+          if(el) el.textContent=msg.message||'';
+          break;
+        }
+        case 'coverResult': {
+          const btn=document.getElementById('btn-cover-generate');
+          if(btn){ btn.disabled=false; btn.textContent='🎨 脚本合成封面'; }
+          const prog=document.getElementById('cover-progress');
+          const wrap=document.getElementById('cover-result');
+          const img=document.getElementById('cover-result-img');
+          const pathEl=document.getElementById('cover-result-path');
+          if(msg.ok){
+            if(img) img.src=msg.dataUrl||'';
+            if(wrap) wrap.style.display='';
+            if(pathEl) pathEl.textContent=msg.outPath||'';
+            if(prog) prog.textContent='✅ 已生成';
+            showToast('✅ 封面已生成','success');
+          } else {
+            if(prog) prog.textContent='❌ '+ (msg.message||'失败');
+            showToast('封面失败: '+(msg.message||''),'error');
+          }
+          break;
+        }
+        case 'coverPromptResult': {
+          const btn=document.getElementById('btn-cover-prompt');
+          if(btn){ btn.disabled=false; btn.textContent='✨ 生成 Prompt'; }
+          const prog=document.getElementById('cover-llm-progress');
+          const out=document.getElementById('cover-prompt-out');
+          if(msg.ok){
+            _coverLastPrompt=msg.prompt||'';
+            if(out){
+              out.dataset.prompt=msg.prompt||'';
+              out.textContent='Prompt:\\n'+(msg.prompt||'')+'\\n\\n调色: '+(msg.palette||'')+'\\n布局: '+(msg.layoutHint||'');
+              out.style.display='';
+            }
+            if(prog) prog.textContent='✅ Prompt 已生成，可点“生成背景图”';
+            showToast('✅ Prompt 已生成','success');
+          } else {
+            if(prog) prog.textContent='❌ '+(msg.message||'');
+            showToast('Prompt 失败: '+(msg.message||''),'error');
+          }
+          break;
+        }
+        case 'coverImageResult': {
+          const btn=document.getElementById('btn-cover-image');
+          if(btn){ btn.disabled=false; btn.textContent='🎨 生成背景图'; }
+          const prog=document.getElementById('cover-llm-progress');
+          const wrap=document.getElementById('cover-bg-gen-preview');
+          const img=document.getElementById('cover-bg-gen-img');
+          if(msg.ok){
+            _coverBgDataUrl=msg.dataUrl||'';
+            const bgInp=document.getElementById('cover-bg');
+            if(bgInp) bgInp.value='[LLM 生成] '+ (msg.outPath||'');
+            // 同步到背景预览
+            const prev=document.getElementById('cover-bg-preview');
+            const prevImg=document.getElementById('cover-bg-preview-img');
+            if(prev&&prevImg){ prevImg.src=msg.dataUrl; prev.style.display=''; }
+            if(wrap&&img){ img.src=msg.dataUrl; wrap.style.display=''; }
+            if(prog) prog.textContent='✅ 背景图已生成，已填入背景栏，可直接合成封面';
+            showToast('✅ 背景图已生成','success');
+          } else {
+            if(prog) prog.textContent='❌ '+(msg.message||'') + (msg.needCopy?'\\n提示：当前模型不支持生图，已复制 Prompt，可去即梦/MJ 生成后拖回':'');
+            if(msg.needCopy && _coverLastPrompt){
+              try{ await navigator.clipboard.writeText(_coverLastPrompt); showToast('Prompt 已复制，去外部生图后拖回','',4000);}catch(_){}
+            }
+            showToast('生图失败: '+(msg.message||''),'error');
+          }
+          break;
+        }
+        case 'coverHistory': {
+          _coverBgHistory = msg.bgs || [];
+          if(msg.titleState){ _coverTitleState = { x: msg.titleState.x||50, y: msg.titleState.y||50, fontSize: msg.titleState.fontSize||78, width: msg.titleState.width||70 }; }
+          // 自动选中默认底图
+          const def = _coverBgHistory.find(function(b){return b.id===msg.defaultBgId;}) || _coverBgHistory[0];
+          if(def && !_coverBgDataUrl){
+            _coverBgDataUrl = def.dataUrl;
+            const inp=document.getElementById('cover-bg'); if(inp) inp.value='[历史] '+def.name;
+          } else if(def && _coverBgHistory.length) {
+            // 若当前无选中，但历史有，则保持预览为默认（仅首次）
+            if(!_coverBgDataUrl) { _coverBgDataUrl=def.dataUrl; }
+          }
+          if(typeof coverRenderHistory==='function') coverRenderHistory(_coverBgHistory, msg.defaultBgId);
+          if(typeof coverApplyPreview==='function') coverApplyPreview();
+          break;
+        }
+        case 'coverSaveBgDone': {
+          if(!msg.ok){ showToast('保存底图失败: '+(msg.message||''),'error'); }
+          else { showToast('✅ 底图已保存并设为默认','success'); }
           break;
         }
       }
