@@ -2416,6 +2416,10 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
   const csp = webview.cspSource;
   const xhsExportMode = vscode.workspace.getConfiguration('markdown2anything').get('xhs.exportMode', 'classic');
   const xhsAdaptiveUseTheme = vscode.workspace.getConfiguration('markdown2anything').get('xhs.adaptiveUseTheme', true);
+  // 当前运行中的扩展版本（显示在工具栏，便于排查旧版本/缓存问题）
+  const extVersion = (() => {
+    try { return require('./package.json').version; } catch (_) { return ''; }
+  })();
 
   // KaTeX 资源 URI（从扩展的 node_modules 加载）
   const katexDistPath = path.join(extContext.extensionUri.fsPath, 'node_modules', 'katex', 'dist');
@@ -3141,8 +3145,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
   <!-- 工具栏 -->
   <div class="toolbar">
     <!-- 第一行：文档标题 -->
-    <div class="toolbar-title-row">
+    <div class="toolbar-title-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
       <span class="toolbar-title" id="doc-title">Markdown2Anything 预览</span>
+      <span id="ext-version" title="当前运行的扩展版本" style="font-size:10px;color:#888;flex-shrink:0;">v${extVersion}</span>
     </div>
 
     <!-- 第二行：所有按钮 -->
@@ -5764,7 +5769,12 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     // 横向滚动（默认）：宽表格在正文宽度内滚动，不撑宽整页排版
     // 完整显示：宽表格自然展开，预览区出现横向滚动条以看全表（仅预览，不影响导出 HTML）
     const tableModeBtn = document.getElementById('btn-table-mode');
-    let tablesExpanded = !!(vscode.getState && vscode.getState().tablesExpanded);
+    let tablesExpanded = false;
+    try {
+      // 防御：某些环境 getState 可能异常，不允许它阻断整个 webview 初始化
+      const st = (typeof vscode !== 'undefined' && vscode.getState) ? vscode.getState() : null;
+      tablesExpanded = !!(st && st.tablesExpanded);
+    } catch (_) {}
 
     function applyTableMode() {
       document.body.classList.toggle('tables-expanded', tablesExpanded);
