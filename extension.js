@@ -2522,20 +2522,20 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       transition: all 0.15s;
       white-space: nowrap;
     }
-    .btn-primary   { background: #07c160; color: #fff; }
-    .btn-primary:hover   { background: #06ad56; }
-    .btn-secondary { background: #555; color: #eee; }
-    .btn-secondary:hover { background: #666; }
+    .btn-primary   { background: #0a9d58; color: #fff; }
+    .btn-primary:hover   { background: #098a4d; }
+    .btn-secondary { background: #4c4c4c; color: #ddd; }
+    .btn-secondary:hover { background: #5a5a5a; }
     .btn-active    { background: #0078d4; color: #fff; }
-    .btn-panel-open { filter: brightness(1.22) saturate(1.1); box-shadow: inset 0 0 0 2px rgba(255,255,255,0.5); }
+    .btn-panel-open { filter: brightness(1.15) saturate(1.05); box-shadow: inset 0 0 0 1.5px rgba(255,255,255,0.32); }
     /* ── 工具栏三区布局：预览控制 / 发布主操作 / 工具 ── */
     .toolbar-zone {
       display: inline-flex;
       align-items: center;
       gap: 5px;
       flex-shrink: 0;
-      background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.07);
+      background: rgba(255,255,255,0.035);
+      border: 1px solid rgba(255,255,255,0.06);
       border-radius: 8px;
       padding: 3px 6px;
     }
@@ -2547,6 +2547,24 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       padding: 6px 16px;
       font-weight: 600;
     }
+    /* 平台按钮统一暗色调（muted brand），图标/文字用品牌色，不再高饱和实底刺眼 */
+    .toolbar-zone-publish > .dropdown > .btn,
+    .toolbar-zone-publish > .btn {
+      background: #1c2026;
+      border: 1px solid #3a4048;
+      box-shadow: none;
+    }
+    .toolbar-zone-publish .brand-glyph { font-weight: 800; margin-right: 5px; }
+    .toolbar-zone-publish .btn svg,
+    .toolbar-zone-publish .btn svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 5px; }
+    .toolbar-zone-publish > .dropdown > #btn-dd-wechat { color: #6fdc9c; border-color: #2e6b47; }
+    .toolbar-zone-publish > .dropdown > #btn-dd-wechat:hover { background: #24322c; border-color: #3a8a5c; }
+    .toolbar-zone-publish > .dropdown > #btn-dd-zhihu { color: #83b2f6; border-color: #2f5f8f; }
+    .toolbar-zone-publish > .dropdown > #btn-dd-zhihu:hover { background: #232c3a; border-color: #3d7bb8; }
+    .toolbar-zone-publish > .dropdown > #btn-dd-xhs { color: #ff8fa0; border-color: #8a3040; }
+    .toolbar-zone-publish > .dropdown > #btn-dd-xhs:hover { background: #3a2428; border-color: #b84855; }
+    .toolbar-zone-publish > #btn-twitter { color: #83c5ee; border-color: #2f5f7a; }
+    .toolbar-zone-publish > #btn-twitter:hover { background: #22303c; border-color: #3d7fa8; }
     /* 工具区：次级按钮缩小（图标为主） */
     .toolbar-zone-tools > .dropdown > .btn,
     .toolbar-zone-tools > .btn {
@@ -2733,14 +2751,14 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       background: var(--m2a-accent, #ff2442);
       flex-shrink: 0;
     }
-    /* 主 CTA「一键导出」：主题色实底 */
+    /* 主 CTA「一键导出」：主题色暗化实底（不刺眼） */
     .xhs-panel #btn-xhs-export-all {
-      background: var(--m2a-accent, #ff2442);
+      background: var(--m2a-accent-dim, var(--m2a-accent, #ff2442));
       border: 1px solid var(--m2a-accent, #ff2442);
       color: #fff;
       font-weight: 600;
     }
-    .xhs-panel #btn-xhs-export-all:hover { filter: brightness(1.12); }
+    .xhs-panel #btn-xhs-export-all:hover { filter: brightness(1.15); }
     /* 次级 CTA「生成预览」：主题色描边 */
     .xhs-panel #btn-xhs-python {
       background: transparent;
@@ -3278,7 +3296,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     <!-- 🟢 微信 ▼ -->
     <div class="dropdown" id="dd-wechat">
-      <button class="btn btn-primary dropdown-trigger" id="btn-dd-wechat">🟢 微信</button>
+      <button class="btn btn-primary dropdown-trigger" id="btn-dd-wechat"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M9.04 4.29C5.18 4.29 2 7.13 2 10.71c0 1.83.92 3.48 2.4 4.6L3.7 18l3.36-1.64c.63.17 1.3.27 1.98.27h.3c-.16-.54-.25-1.11-.25-1.7 0-3.15 2.63-5.71 5.88-5.71.28 0 .56.02.83.06-.62-3.53-3.65-5.99-6.76-5.99z"/><path d="M14.77 10.57c-3.17 0-5.75 2.41-5.75 5.38s2.58 5.38 5.75 5.38c.68 0 1.34-.11 1.95-.31L19.97 23l-.76-2.38A5.37 5.37 0 0 0 20.52 15.95c0-2.97-2.58-5.38-5.75-5.38z"/></svg>微信</button>
       <div class="dropdown-menu" id="menu-wechat">
         <div class="dropdown-section-label">操作方式</div>
         <button class="dropdown-item" id="btn-copy">
@@ -3300,7 +3318,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     <!-- 🔵 知乎 ▼ -->
     <div class="dropdown" id="dd-zhihu">
-      <button class="btn btn-zhihu dropdown-trigger" id="btn-dd-zhihu">🔵 知乎</button>
+      <button class="btn btn-zhihu dropdown-trigger" id="btn-dd-zhihu"><span class="brand-glyph">知</span>知乎</button>
       <div class="dropdown-menu" id="menu-zhihu">
         <div class="dropdown-section-label">操作方式</div>
         <button class="dropdown-item" id="btn-zhihu">
@@ -3322,7 +3340,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     <!-- 📱 小红书 ▼ -->
     <div class="dropdown" id="dd-xhs">
-      <button class="btn btn-xhs dropdown-trigger" id="btn-dd-xhs">📱 小红书</button>
+      <button class="btn btn-xhs dropdown-trigger" id="btn-dd-xhs"><span class="brand-glyph" style="font-size:11px;letter-spacing:.02em;">RED</span>小红书</button>
       <div class="dropdown-menu" id="menu-xhs">
         <div class="dropdown-section-label">图文笔记（推荐）</div>
         <button class="dropdown-item" id="btn-xhs">
@@ -3345,7 +3363,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     </div>
 
     <!-- 🐦 Twitter -->
-    <button class="btn btn-twitter" id="btn-twitter" title="生成中文推文，用真实浏览器自动发布到 Twitter/X">🐦 Twitter</button>
+    <button class="btn btn-twitter" id="btn-twitter" title="生成中文推文，用真实浏览器自动发布到 Twitter/X"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M4 4l16 16M20 4L4 20"/></svg>Twitter</button>
       </div><!-- /区② 发布主操作 -->
 
       <!-- 区③ 工具 -->
@@ -3386,14 +3404,34 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       </div>
     </div>
 
-    <!-- ⚙️ LLM 配置 -->
-    <button class="btn btn-secondary" id="btn-llm-config" title="配置 LLM 接口（AI 生成文案/PPT 改写共用）">⚙️</button>
-
-    <!-- 🎨 样式 -->
-    <button class="btn btn-secondary" id="btn-style" title="自定义 CSS 样式">🎨</button>
-
-    <!-- 🖼️ 封面 -->
-    <button class="btn btn-secondary" id="btn-cover" title="生成小红书封面（脚本固化 + LLM 生图）">🖼️</button>
+    <!-- ⋮ 更多工具 ▼ -->
+    <div class="dropdown" id="dd-more">
+      <button class="btn btn-secondary dropdown-trigger" id="btn-dd-more" title="更多工具：LLM 配置 / 样式 / 封面">⋮ 更多</button>
+      <div class="dropdown-menu align-right" id="menu-more">
+        <div class="dropdown-section-label">更多工具</div>
+        <button class="dropdown-item" id="btn-llm-config">
+          <span class="item-icon">⚙️</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">LLM 配置</span>
+            <span class="item-desc">AI 生成文案 / PPT 改写共用接口</span>
+          </span>
+        </button>
+        <button class="dropdown-item" id="btn-style">
+          <span class="item-icon">🎨</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">自定义样式</span>
+            <span class="item-desc">覆盖预览 / 导出的 CSS</span>
+          </span>
+        </button>
+        <button class="dropdown-item" id="btn-cover">
+          <span class="item-icon">🖼️</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">封面生成</span>
+            <span class="item-desc">小红书 1080×1440 高清封面</span>
+          </span>
+        </button>
+      </div>
+    </div>
       </div><!-- /区③ 工具 -->
 
     </div><!-- /toolbar-btn-row -->
@@ -4085,6 +4123,15 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       const r = parseInt(h.slice(0,2), 16), g = parseInt(h.slice(2,4), 16), b = parseInt(h.slice(4,6), 16);
       return 'rgba(' + r + ',' + g + ',' + b + ',0.15)';
     }
+    function darkenHex(hex, ratio) {
+      let h = String(hex).replace('#', '').trim();
+      if (h.length === 3) h = h.split('').map(x => x + x).join('');
+      if (h.length !== 6) return '#ff2442';
+      const r = Math.round(parseInt(h.slice(0,2), 16) * (1 - ratio));
+      const g = Math.round(parseInt(h.slice(2,4), 16) * (1 - ratio));
+      const b = Math.round(parseInt(h.slice(4,6), 16) * (1 - ratio));
+      return '#' + [r, g, b].map(n => n.toString(16).padStart(2, '0')).join('');
+    }
 
     function applyTheme(theme) {
       currentThemeBg = theme.wrapperBg || '#ffffff';
@@ -4103,6 +4150,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       const accent = webThemeAccent(theme);
       document.documentElement.style.setProperty('--m2a-accent', accent);
       document.documentElement.style.setProperty('--m2a-accent-soft', accentSoftRgba(accent));
+      document.documentElement.style.setProperty('--m2a-accent-dim', darkenHex(accent, 0.3));
     }
 
     // ─── 小红书辅助函数 ───
@@ -4381,9 +4429,6 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       // 只改工具栏上真正的触发按钮，下拉菜单里的 dropdown-item 不在这里管
       const map = [
         ['btn-toc',        'btn-toc',       panelState.tocPanelOpen],
-        ['btn-style',      'btn-secondary', panelState.stylePanelOpen],
-        ['btn-llm-config', 'btn-secondary', panelState.llmConfigPanelOpen],
-        ['btn-cover',      'btn-secondary', panelState.coverPanelOpen],
         ['btn-twitter',    'btn-twitter',   panelState.twitterPanelOpen],
         ['btn-dd-wechat',  'btn-primary',   panelState.uploadPanelOpen],
         ['btn-dd-zhihu',   'btn-zhihu',     panelState.zhihuPublishPanelOpen],
@@ -4481,6 +4526,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       zhihu:   document.getElementById('menu-zhihu'),
       xhs:     document.getElementById('menu-xhs'),
       export:  document.getElementById('menu-export'),
+      more:    document.getElementById('menu-more'),
     };
 
     function openDropdown(key) {
@@ -4516,12 +4562,23 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       closeAllDropdowns();
       if (!already) openDropdown('export');
     });
+    document.getElementById('btn-dd-more').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const already = dropdownMenus.more.classList.contains('open');
+      closeAllDropdowns();
+      if (!already) openDropdown('more');
+    });
 
     // 点任意地方关闭所有下拉
     document.addEventListener('click', () => closeAllDropdowns());
     // 菜单内点击不关闭（由各 item handler 负责关闭）
     Object.values(dropdownMenus).forEach(el => {
       if (el) el.addEventListener('click', e => e.stopPropagation());
+    });
+    // 「更多」菜单项点击后关闭菜单（它们打开的是侧边面板）
+    ['btn-llm-config', 'btn-style', 'btn-cover'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('click', () => closeAllDropdowns());
     });
 
     // ─── 微信 ───
