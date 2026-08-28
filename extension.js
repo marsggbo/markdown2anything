@@ -2880,6 +2880,12 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       padding: 8px;
     }
     .article-wrapper table th { background: #f2f2f2; font-weight: bold; text-align: center; }
+    /* 宽表格滚动容器：内部横向滚动，避免宽表格把整个预览页撑宽
+       （renderMarkdown 会把每个 <table> 包进 .table-wrapper） */
+    .article-wrapper .table-wrapper {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
     .article-wrapper ul, .article-wrapper ol { padding-left: 1.5em; }
     .article-wrapper figcaption {
       display: block;
@@ -3323,6 +3329,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           <div><code style="color:#4fc3f7;">.article-wrapper table</code> — 表格</div>
           <div><code style="color:#4fc3f7;">.article-wrapper table th</code> — 表头</div>
           <div><code style="color:#4fc3f7;">.article-wrapper table td</code> — 表格单元格</div>
+          <div><code style="color:#4fc3f7;">.article-wrapper .table-wrapper</code> — 宽表格滚动容器（溢出时内部横向滚动）</div>
           <div><code style="color:#4fc3f7;">.article-wrapper ul / ol</code> — 列表</div>
           <div><code style="color:#4fc3f7;">.article-wrapper img</code> — 图片</div>
           <div><code style="color:#4fc3f7;">.article-wrapper figure</code> — 图片容器</div>
