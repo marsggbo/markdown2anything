@@ -2881,10 +2881,17 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     }
     .article-wrapper table th { background: #f2f2f2; font-weight: bold; text-align: center; }
     /* 宽表格滚动容器：内部横向滚动，避免宽表格把整个预览页撑宽
-       （renderMarkdown 会把每个 <table> 包进 .table-wrapper） */
+       （renderMarkdown 会把每个 <table> 包进 .table-wrapper）
+       默认「横向滚动」模式；工具栏按钮可切换到「完整显示」（body.tables-expanded） */
     .article-wrapper .table-wrapper {
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
+    }
+    /* 完整显示模式：宽表格自然展开，预览区出现横向滚动条以看全表（仅影响预览，不改变导出的 HTML） */
+    body.tables-expanded .article-wrapper .table-wrapper {
+      overflow-x: visible !important;
+      overflow-y: visible !important;
+      -webkit-overflow-scrolling: auto !important;
     }
     .article-wrapper ul, .article-wrapper ol { padding-left: 1.5em; }
     .article-wrapper figcaption {
@@ -3163,6 +3170,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     <!-- 编辑器同步 -->
     <button class="btn btn-secondary" id="btn-sync-to-preview" title="跳到编辑器光标对应的预览位置" style="padding:4px 9px;font-size:12px;">→ 预览</button>
     <button class="btn btn-secondary" id="btn-sync-to-editor" title="跳到当前预览位置对应的编辑器行" style="padding:4px 9px;font-size:12px;">← 编辑</button>
+
+    <!-- 表格显示模式：横向滚动 / 完整显示（仅预览，不影响导出） -->
+    <button class="btn btn-secondary" id="btn-table-mode" title="切换宽表格显示：横向滚动（不撑宽正文）或完整显示（看全表）" style="padding:4px 9px;font-size:12px;display:none;">表格·滚动</button>
 
     <div class="toolbar-sep"></div>
 
@@ -5070,6 +5080,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           currentBodyHtml = msg.bodyHtml || '';
           currentTitle    = msg.title || '';
           document.getElementById('preview-content').innerHTML = currentBodyHtml;
+          // 有表格才显示「表格显示模式」切换按钮
+          const tmb = document.getElementById('btn-table-mode');
+          if (tmb) tmb.style.display = document.querySelector('#preview-content table') ? '' : 'none';
           document.getElementById('doc-title').textContent = currentTitle
             ? \`预览: \${currentTitle}\`
             : 'Markdown2Anything 预览';
@@ -5746,6 +5759,30 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         : e.deltaY > 0 ? 10 : -10; // 鼠标滚轮：固定步长
       applyZoom(currentZoom - factor, mouseY);
     }, { passive: false });
+
+    // ─── 表格显示模式：横向滚动 ↔ 完整显示 ───
+    // 横向滚动（默认）：宽表格在正文宽度内滚动，不撑宽整页排版
+    // 完整显示：宽表格自然展开，预览区出现横向滚动条以看全表（仅预览，不影响导出 HTML）
+    const tableModeBtn = document.getElementById('btn-table-mode');
+    let tablesExpanded = !!(vscode.getState && vscode.getState().tablesExpanded);
+
+    function applyTableMode() {
+      document.body.classList.toggle('tables-expanded', tablesExpanded);
+      if (!tableModeBtn) return;
+      tableModeBtn.textContent = tablesExpanded ? '表格·展开' : '表格·滚动';
+      tableModeBtn.title = tablesExpanded
+        ? '当前：完整显示。点击切换为「横向滚动」——宽表格在正文内滚动，不撑宽排版'
+        : '当前：横向滚动。点击切换为「完整显示」——宽表格完整展示，可横向滚动看全表';
+    }
+    if (tableModeBtn) {
+      tableModeBtn.addEventListener('click', () => {
+        tablesExpanded = !tablesExpanded;
+        if (vscode.setState) vscode.setState({ tablesExpanded });
+        applyTableMode();
+        showToast(tablesExpanded ? '表格：完整显示' : '表格：横向滚动', '', 1500);
+      });
+    }
+    applyTableMode();
 
     // ─── 双向同步：编辑器 ↔ 预览（纯手动，不自动触发）───
     // data-source-line 已在渲染时注入到每个标题元素，无需手动配对
