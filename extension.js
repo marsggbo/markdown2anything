@@ -2528,6 +2528,31 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     .btn-secondary:hover { background: #666; }
     .btn-active    { background: #0078d4; color: #fff; }
     .btn-panel-open { filter: brightness(1.22) saturate(1.1); box-shadow: inset 0 0 0 2px rgba(255,255,255,0.5); }
+    /* ── 工具栏三区布局：预览控制 / 发布主操作 / 工具 ── */
+    .toolbar-zone {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 8px;
+      padding: 3px 6px;
+    }
+    .btn-icon { padding: 4px 8px; font-size: 13px; }
+    /* 发布主操作区：平台按钮放大加粗，作为主要 CTA */
+    .toolbar-zone-publish > .dropdown > .btn,
+    .toolbar-zone-publish > .btn {
+      font-size: 13.5px;
+      padding: 6px 16px;
+      font-weight: 600;
+    }
+    /* 工具区：次级按钮缩小（图标为主） */
+    .toolbar-zone-tools > .dropdown > .btn,
+    .toolbar-zone-tools > .btn {
+      font-size: 12.5px;
+      padding: 4px 10px;
+    }
     /* ── LLM 配置卡片 ── */
     .llm-profile-row {
       background: #252525;
@@ -2681,6 +2706,81 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       flex-shrink: 0;
     }
     details.section-details[open] > summary .toggle-arrow { transform: rotate(90deg); }
+    /* ── 小红书面板/封面：跟随主题强调色（--m2a-accent 由 applyTheme 注入） ── */
+    .xhs-panel .section-block {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin-bottom: 12px;
+    }
+    .xhs-panel .section-block-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 700;
+      color: #eee;
+      margin: 0 0 12px;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    .xhs-panel .section-block-title::before {
+      content: '';
+      width: 4px;
+      height: 14px;
+      border-radius: 2px;
+      background: var(--m2a-accent, #ff2442);
+      flex-shrink: 0;
+    }
+    /* 主 CTA「一键导出」：主题色实底 */
+    .xhs-panel #btn-xhs-export-all {
+      background: var(--m2a-accent, #ff2442);
+      border: 1px solid var(--m2a-accent, #ff2442);
+      color: #fff;
+      font-weight: 600;
+    }
+    .xhs-panel #btn-xhs-export-all:hover { filter: brightness(1.12); }
+    /* 次级 CTA「生成预览」：主题色描边 */
+    .xhs-panel #btn-xhs-python {
+      background: transparent;
+      border: 1px solid var(--m2a-accent, #ff2442);
+      color: var(--m2a-accent, #ff2442);
+    }
+    .xhs-panel #btn-xhs-python:hover { background: var(--m2a-accent-soft, rgba(255,36,66,.15)); }
+    /* 折叠块升级为卡片式 accordion */
+    .xhs-panel details.section-details > summary {
+      font-size: 12.5px;
+      color: #ccc;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 8px 10px;
+      background: #242424;
+    }
+    .xhs-panel details.section-details > summary:hover {
+      border-color: var(--m2a-accent, #ff2442);
+      color: #fff;
+    }
+    .xhs-panel details.section-details[open] > summary {
+      border-color: var(--m2a-accent, #ff2442);
+      color: #fff;
+    }
+    /* 表单 focus 描边跟随主题色 */
+    .xhs-panel input:focus,
+    .xhs-panel select:focus,
+    .xhs-panel textarea:focus {
+      border-color: var(--m2a-accent, #ff2442) !important;
+      outline: none;
+      box-shadow: 0 0 0 1px var(--m2a-accent, #ff2442);
+    }
+    .xhs-panel label { color: #bbb; }
+    /* 预览图缩略图：圆角卡片感 */
+    .xhs-panel #xhs-output img {
+      border-radius: 8px;
+      border: 1px solid #333;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+      margin-bottom: 8px;
+    }
     /* ── Ghost 按钮 ── */
     .btn-ghost {
       background: none;
@@ -3066,7 +3166,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       font-size: 12px;
       color: #666;
     }
-    .btn-toc { background: #444; color: #eee; }
+    .btn-toc { background: #444; color: #eee; padding: 4px 8px; font-size: 13px; }
     .btn-toc:hover { background: #555; }
     .btn-ppt  { background: #7c3aed; color: #fff; }
     .btn-ppt:hover  { background: #6d28d9; }
@@ -3150,36 +3250,31 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       <span id="ext-version" title="当前运行的扩展版本" style="font-size:10px;color:#888;flex-shrink:0;">v${extVersion}</span>
     </div>
 
-    <!-- 第二行：所有按钮 -->
+    <!-- 第二行：三区布局（预览控制 / 发布主操作 / 工具） -->
     <div class="toolbar-btn-row">
 
-    <!-- 主题选择 -->
-    <select id="theme-select" title="切换主题" style="
-      padding:5px 8px; border:none; border-radius:4px; cursor:pointer;
-      font-size:13px; background:#3a3a3a; color:#eee; outline:none; flex-shrink:0;
-    ">
-      <option value="">主题...</option>
-    </select>
+      <!-- 区① 预览控制（紧凑图标按钮） -->
+      <div class="toolbar-zone toolbar-zone-preview">
+        <select id="theme-select" title="切换主题" style="
+          padding:4px 6px; border:none; border-radius:4px; cursor:pointer;
+          font-size:12.5px; background:#3a3a3a; color:#eee; outline:none; flex-shrink:0;
+        ">
+          <option value="">主题</option>
+        </select>
+        <button class="btn btn-toc" id="btn-toc" title="显示/隐藏文章目录">📑</button>
+        <div class="zoom-controls">
+          <button class="btn btn-icon" id="btn-zoom-out" title="缩小（Ctrl+滚轮）">－</button>
+          <span id="zoom-value">100%</span>
+          <button class="btn btn-icon" id="btn-zoom-in" title="放大（Ctrl+滚轮）">＋</button>
+          <button class="btn btn-icon" id="btn-zoom-reset" title="重置缩放">↺</button>
+        </div>
+        <button class="btn btn-icon" id="btn-sync-to-preview" title="跳到编辑器光标对应的预览位置">→</button>
+        <button class="btn btn-icon" id="btn-sync-to-editor" title="跳到当前预览位置对应的编辑器行">←</button>
+        <button class="btn btn-icon" id="btn-table-mode" title="切换宽表格显示：横向滚动（不撑宽正文）或完整显示（看全表）" style="display:none;">▦ 滚动</button>
+      </div>
 
-    <!-- 目录 -->
-    <button class="btn btn-toc" id="btn-toc" title="显示/隐藏文章目录">📑 目录</button>
-
-    <!-- 缩放 -->
-    <div class="zoom-controls">
-      <button class="btn btn-secondary" id="btn-zoom-out" title="缩小（Ctrl+滚轮）">－</button>
-      <span id="zoom-value">100%</span>
-      <button class="btn btn-secondary" id="btn-zoom-in" title="放大（Ctrl+滚轮）">＋</button>
-      <button class="btn btn-secondary" id="btn-zoom-reset" title="重置缩放" style="padding:4px 7px;">↺</button>
-    </div>
-
-    <!-- 编辑器同步 -->
-    <button class="btn btn-secondary" id="btn-sync-to-preview" title="跳到编辑器光标对应的预览位置" style="padding:4px 9px;font-size:12px;">→ 预览</button>
-    <button class="btn btn-secondary" id="btn-sync-to-editor" title="跳到当前预览位置对应的编辑器行" style="padding:4px 9px;font-size:12px;">← 编辑</button>
-
-    <!-- 表格显示模式：横向滚动 / 完整显示（仅预览，不影响导出） -->
-    <button class="btn btn-secondary" id="btn-table-mode" title="切换宽表格显示：横向滚动（不撑宽正文）或完整显示（看全表）" style="padding:4px 9px;font-size:12px;display:none;">表格·滚动</button>
-
-    <div class="toolbar-sep"></div>
+      <!-- 区② 发布主操作 -->
+      <div class="toolbar-zone toolbar-zone-publish">
 
     <!-- 🟢 微信 ▼ -->
     <div class="dropdown" id="dd-wechat">
@@ -3251,8 +3346,10 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     <!-- 🐦 Twitter -->
     <button class="btn btn-twitter" id="btn-twitter" title="生成中文推文，用真实浏览器自动发布到 Twitter/X">🐦 Twitter</button>
+      </div><!-- /区② 发布主操作 -->
 
-    <div class="toolbar-sep"></div>
+      <!-- 区③ 工具 -->
+      <div class="toolbar-zone toolbar-zone-tools">
 
     <!-- 💾 导出 ▼ -->
     <div class="dropdown" id="dd-export">
@@ -3290,13 +3387,14 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     </div>
 
     <!-- ⚙️ LLM 配置 -->
-    <button class="btn btn-secondary" id="btn-llm-config" title="配置 LLM 接口（AI 生成文案/PPT 改写共用）">⚙️ LLM</button>
+    <button class="btn btn-secondary" id="btn-llm-config" title="配置 LLM 接口（AI 生成文案/PPT 改写共用）">⚙️</button>
 
     <!-- 🎨 样式 -->
-    <button class="btn btn-secondary" id="btn-style" title="自定义 CSS 样式">🎨 样式</button>
+    <button class="btn btn-secondary" id="btn-style" title="自定义 CSS 样式">🎨</button>
 
     <!-- 🖼️ 封面 -->
-    <button class="btn btn-secondary" id="btn-cover" title="生成小红书封面（脚本固化 + LLM 生图）">🖼️ 封面</button>
+    <button class="btn btn-secondary" id="btn-cover" title="生成小红书封面（脚本固化 + LLM 生图）">🖼️</button>
+      </div><!-- /区③ 工具 -->
 
     </div><!-- /toolbar-btn-row -->
   </div><!-- /toolbar -->
@@ -3522,7 +3620,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
             <option value="adaptive"${xhsExportMode === 'adaptive' ? ' selected' : ''}>手机自适应截图</option>
           </select>
           <label style="display:${xhsExportMode === 'adaptive' ? 'flex' : 'none'};align-items:center;gap:6px;margin:8px 0 0;font-size:12px;color:#aaa;cursor:pointer;" id="xhs-theme-row">
-            <input type="checkbox" id="xhs-adaptive-theme" ${xhsAdaptiveUseTheme ? 'checked' : ''} style="accent-color:#ff2442;"> 跟随预览主题色
+            <input type="checkbox" id="xhs-adaptive-theme" ${xhsAdaptiveUseTheme ? 'checked' : ''} style="accent-color:var(--m2a-accent,#ff2442);"> 跟随预览主题色
             <span style="font-size:11px;color:#666;">(关闭则固定小红书红)</span>
           </label>
           <p class="hint" id="xhs-mode-hint" style="margin:6px 0 10px;line-height:1.4;"></p>
@@ -3962,6 +4060,32 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       el._timer = setTimeout(() => { el.className = 'toast'; }, duration);
     }
 
+    // ─── 主题强调色（用于小红书面板/封面等 UI 跟随主题色） ───
+    const M2A_THEME_ACCENT = {
+      wechat: '#de7456', claude: '#d97706', macos: '#0071e3', dark: '#89b4fa',
+      zhihu: '#0f6fec', monochrome: '#111111', spring: '#e86f8c', academic: '#1a1a1a',
+      xhs: '#ff2442', notion: '#0f7b6c', 'claude-pro': '#c2410c', medium: '#1a1a1a',
+      ryf: '#0079c1', 'clean-blue': '#3182ce',
+    };
+    function webThemeAccent(theme) {
+      if (theme && M2A_THEME_ACCENT[theme.id]) return M2A_THEME_ACCENT[theme.id];
+      const m = String((theme && theme.css) || '').match(/strong\s*\{[^}]*color\s*:\s*(#[0-9a-fA-F]{3,6}|rgb\([^)]+\))/i);
+      if (m) {
+        const c = m[1];
+        if (c.startsWith('#')) return c;
+        const rgb = c.match(/\d+/g);
+        if (rgb && rgb.length >= 3) return '#' + rgb.slice(0, 3).map(n => parseInt(n).toString(16).padStart(2, '0')).join('');
+      }
+      return '#ff2442';
+    }
+    function accentSoftRgba(accent) {
+      let h = String(accent).replace('#', '').trim();
+      if (h.length === 3) h = h.split('').map(x => x + x).join('');
+      if (h.length !== 6) return 'rgba(255,36,66,0.15)';
+      const r = parseInt(h.slice(0,2), 16), g = parseInt(h.slice(2,4), 16), b = parseInt(h.slice(4,6), 16);
+      return 'rgba(' + r + ',' + g + ',' + b + ',0.15)';
+    }
+
     function applyTheme(theme) {
       currentThemeBg = theme.wrapperBg || '#ffffff';
       // 替换主题样式
@@ -3975,6 +4099,10 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         theme.css.replace(/([^}]+{)/g, (m) => '.article-wrapper ' + m);
       // 背景色应用到整个预览区域
       document.querySelector('.preview-scroll').style.background = theme.wrapperBg;
+      // 注入主题强调色，供小红书面板/封面等 UI 使用
+      const accent = webThemeAccent(theme);
+      document.documentElement.style.setProperty('--m2a-accent', accent);
+      document.documentElement.style.setProperty('--m2a-accent-soft', accentSoftRgba(accent));
     }
 
     // ─── 小红书辅助函数 ───
@@ -5779,7 +5907,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     function applyTableMode() {
       document.body.classList.toggle('tables-expanded', tablesExpanded);
       if (!tableModeBtn) return;
-      tableModeBtn.textContent = tablesExpanded ? '表格·展开' : '表格·滚动';
+      tableModeBtn.textContent = tablesExpanded ? '▦ 展开' : '▦ 滚动';
       tableModeBtn.title = tablesExpanded
         ? '当前：完整显示。点击切换为「横向滚动」——宽表格在正文内滚动，不撑宽排版'
         : '当前：横向滚动。点击切换为「完整显示」——宽表格完整展示，可横向滚动看全表';
