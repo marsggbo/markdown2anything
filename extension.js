@@ -3248,6 +3248,99 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       font-size: 10px;
       opacity: 0.7;
     }
+    /* ── 预览内文本搜索 ── */
+    /* 高度为 0 的 sticky 锚点：搜索框浮在预览区右上角，既跟随滚动又不推挤正文 */
+    .find-anchor {
+      position: sticky;
+      top: 0;
+      left: 0;
+      height: 0;
+      z-index: 40;
+    }
+    .find-bar {
+      display: none;
+      position: absolute;
+      top: 10px;
+      right: 18px;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 8px;
+      background: #2c2c2c;
+      border: 1px solid #4a4a4a;
+      border-radius: 6px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+      font-size: 12px;
+      color: #ddd;
+    }
+    .find-bar.open { display: flex; }
+    .find-input-wrap {
+      display: flex;
+      align-items: center;
+      background: #1e1e1e;
+      border: 1px solid #3c3c3c;
+      border-radius: 4px;
+      padding-right: 3px;
+    }
+    .find-input-wrap:focus-within { border-color: #0078d4; }
+    #find-input {
+      width: 180px;
+      padding: 4px 8px;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #eee;
+      font-size: 12.5px;
+    }
+    .find-opt {
+      width: 22px;
+      height: 20px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      border-radius: 3px;
+      color: #888;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .find-opt:hover { background: #3a3a3a; color: #ccc; }
+    .find-opt.active { background: #0078d4; color: #fff; }
+    .find-count {
+      min-width: 64px;
+      text-align: center;
+      color: #999;
+      font-size: 11.5px;
+      white-space: nowrap;
+    }
+    .find-count.find-count-error { color: #f48771; }
+    .find-nav {
+      width: 24px;
+      height: 22px;
+      padding: 0;
+      background: transparent;
+      border: none;
+      border-radius: 3px;
+      color: #bbb;
+      font-size: 13px;
+      line-height: 1;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .find-nav:hover:not(:disabled) { background: #3a3a3a; color: #fff; }
+    .find-nav:disabled { opacity: 0.35; cursor: default; }
+    /* 命中高亮：!important 压过主题 CSS，避免个别主题重定义 mark 样式 */
+    #preview-content mark.m2a-hit {
+      background: #ffe066 !important;
+      color: #1a1a1a !important;
+      padding: 0 !important;
+      border-radius: 2px;
+    }
+    #preview-content mark.m2a-hit.current {
+      background: #ff8c1a !important;
+      color: #fff !important;
+      box-shadow: 0 0 0 2px rgba(255,140,26,0.45);
+    }
     /* 工具栏分隔线 */
     .toolbar-sep {
       width: 1px;
@@ -3280,6 +3373,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           <option value="">主题</option>
         </select>
         <button class="btn btn-toc" id="btn-toc" title="显示/隐藏文章目录">📑</button>
+        <button class="btn btn-toc" id="btn-find" title="在预览中搜索文本（Ctrl/Cmd+F）">🔍</button>
         <div class="zoom-controls">
           <button class="btn btn-icon" id="btn-zoom-out" title="缩小（Ctrl+滚轮）">－</button>
           <span id="zoom-value">100%</span>
@@ -3449,6 +3543,20 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
     <!-- 预览区 -->
     <div class="preview-scroll" id="preview-scroll">
+      <!-- 预览内搜索框：挂在高度 0 的 sticky 锚点上，浮在预览区右上角 -->
+      <div class="find-anchor">
+        <div class="find-bar" id="find-bar">
+          <div class="find-input-wrap">
+            <input type="text" id="find-input" placeholder="在预览中搜索" autocomplete="off" spellcheck="false">
+            <button class="find-opt" id="find-case" title="区分大小写">Aa</button>
+            <button class="find-opt" id="find-regex" title="按正则表达式搜索">.*</button>
+          </div>
+          <span class="find-count" id="find-count"></span>
+          <button class="find-nav" id="find-prev" title="上一个（Shift+Enter）" disabled>↑</button>
+          <button class="find-nav" id="find-next" title="下一个（Enter）" disabled>↓</button>
+          <button class="find-nav" id="find-close" title="关闭（Esc）">✕</button>
+        </div>
+      </div>
       <div class="zoom-canvas" id="zoom-canvas">
         <div class="article-wrapper" id="preview-content">
           <p style="color:#999;text-align:center;">正在加载预览...</p>
@@ -4290,6 +4398,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
 
         // 2) 用 cloneNode(true) 克隆 wrapper 内容（保留所有样式与图片 src）
         const clone = wrapper.cloneNode(true);
+        clearFindMarks(clone);   // 搜索高亮只属于预览，别混进导出的图里
         // 强制覆盖克隆体的宽度限制
         clone.style.width = 'auto';
         clone.style.maxWidth = 'none';
@@ -4512,6 +4621,347 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     document.getElementById('btn-toc').addEventListener('click', () => {
       togglePanel('toc-panel', 'tocPanelOpen', []);
       if (panelState.tocPanelOpen) buildToc();
+    });
+
+    // ─── 预览内文本搜索 ───────────────────────────────────────
+    // 在渲染后的预览 DOM 上做全文查找，命中处包一层 <mark class="m2a-hit">。
+    // 只动 DOM，不动 currentBodyHtml —— 复制 / 导出 / 上传拿到的都是扩展端
+    // 重新渲染的 HTML，跟搜索状态无关；小红书截图走 DOM 克隆，克隆后会剥掉高亮。
+    const FIND_MARK_CLASS = 'm2a-hit';
+    const FIND_MAX_MATCHES = 2000;
+    // 块级容器：跨块的文本不该被拼成一个匹配（否则「上段末尾+下段开头」会误命中）
+    const FIND_BLOCK_TAGS = new Set([
+      'P','DIV','LI','TD','TH','TR','TABLE','THEAD','TBODY','UL','OL','DL','DT','DD',
+      'PRE','BLOCKQUOTE','FIGURE','FIGCAPTION','SECTION','ARTICLE','HEADER','FOOTER',
+      'H1','H2','H3','H4','H5','H6','HR',
+    ]);
+
+    const findState = {
+      open: false,
+      query: '',
+      caseSensitive: false,
+      useRegex: false,
+      matches: [],    // 每项 = 该次匹配对应的 <mark> 数组（跨行内标签时会有多个）
+      current: -1,
+      truncated: false,
+    };
+
+    function escapeFindRegExp(s) {
+      return s.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+    }
+
+    // 非法正则会抛错，由调用方 catch 后提示
+    function buildFindRegex() {
+      if (!findState.query) return null;
+      const source = findState.useRegex ? findState.query : escapeFindRegExp(findState.query);
+      return new RegExp(source, findState.caseSensitive ? 'g' : 'gi');
+    }
+
+    // 去掉高亮，把 <mark> 还原成纯文本。scope 可传克隆节点（截图前清理用）
+    function clearFindMarks(scope) {
+      const root = scope || document.getElementById('preview-content');
+      if (!root) return;
+      const marks = root.querySelectorAll('mark.' + FIND_MARK_CLASS);
+      if (!marks.length) return;
+      marks.forEach(mark => {
+        const parent = mark.parentNode;
+        if (!parent) return;
+        while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+        parent.removeChild(mark);
+      });
+      root.normalize();   // 合并相邻文本节点，避免反复搜索把 DOM 切得越来越碎
+    }
+
+    function findNearestBlock(node, root) {
+      let el = node.parentElement;
+      while (el && el !== root && !FIND_BLOCK_TAGS.has(el.tagName)) el = el.parentElement;
+      return el || root;
+    }
+
+    // 把预览区可见文本拼成一个大字符串，同时记下每段文本的来源节点与偏移。
+    // 拼接而非逐节点匹配，是为了能搜到被行内标签（**加粗**、行内代码）打断的词。
+    function collectFindText(root) {
+      const segments = [];
+      let buffer = '';
+      let lastBlock = null;
+      const walker = document.createTreeWalker(
+        root,
+        NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
+        {
+          acceptNode(node) {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+              const tag = node.tagName;
+              if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return NodeFilter.FILTER_REJECT;
+              // KaTeX 公式内部有一份隐藏的 MathML 副本，且结构精细：
+              // 整棵跳过，既不会搜到看不见的文本，也不会插 <mark> 把公式排版搞坏
+              if (node.classList && node.classList.contains('katex')) return NodeFilter.FILTER_REJECT;
+              return tag === 'BR' ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+            }
+            return node.nodeValue ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+          },
+        }
+      );
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.nodeType === Node.ELEMENT_NODE) { buffer += '\\n'; continue; }   // <br>
+        const block = findNearestBlock(node, root);
+        if (lastBlock !== null && block !== lastBlock) buffer += '\\n';
+        lastBlock = block;
+        const start = buffer.length;
+        buffer += node.nodeValue;
+        segments.push({ node: node, start: start, end: buffer.length });
+      }
+      return { buffer: buffer, segments: segments };
+    }
+
+    // 在单个文本节点的 [from, to) 上包一层 <mark>，返回该 mark
+    function wrapFindRange(textNode, from, to) {
+      try {
+        const range = document.createRange();
+        range.setStart(textNode, from);
+        range.setEnd(textNode, to);
+        const mark = document.createElement('mark');
+        mark.className = FIND_MARK_CLASS;
+        range.surroundContents(mark);
+        return mark;
+      } catch (e) {
+        return null;   // 节点意外被改动时跳过这一段，不影响其他命中
+      }
+    }
+
+    function applyFindMarks(regex) {
+      const root = document.getElementById('preview-content');
+      if (!root) return [];
+      const collected = collectFindText(root);
+      if (!collected.buffer || !collected.segments.length) return [];
+
+      // 先在整段文本上跑正则，拿到所有 [start, end)
+      const ranges = [];
+      findState.truncated = false;
+      regex.lastIndex = 0;
+      let m;
+      while ((m = regex.exec(collected.buffer)) !== null) {
+        if (m[0].length === 0) { regex.lastIndex++; continue; }   // 空匹配会死循环
+        ranges.push([m.index, m.index + m[0].length]);
+        if (ranges.length >= FIND_MAX_MATCHES) { findState.truncated = true; break; }
+      }
+      if (!ranges.length) return [];
+
+      // 倒序包装：surroundContents 会切分文本节点，先改后面的，
+      // 前面已经算好的偏移才不会失效
+      const segments = collected.segments;
+      const result = new Array(ranges.length);
+      for (let i = ranges.length - 1; i >= 0; i--) {
+        const s = ranges[i][0];
+        const e = ranges[i][1];
+        const marks = [];
+        for (let j = segments.length - 1; j >= 0; j--) {
+          const seg = segments[j];
+          if (seg.end <= s || seg.start >= e) continue;
+          const from = Math.max(s, seg.start) - seg.start;
+          const to   = Math.min(e, seg.end)   - seg.start;
+          if (to <= from) continue;
+          const mark = wrapFindRange(seg.node, from, to);
+          if (mark) marks.unshift(mark);
+        }
+        result[i] = marks;
+      }
+      return result.filter(list => list && list.length);
+    }
+
+    function updateFindCount(text, isError) {
+      const el = document.getElementById('find-count');
+      if (!el) return;
+      el.textContent = text;
+      el.classList.toggle('find-count-error', !!isError);
+    }
+
+    function setFindNavEnabled(enabled) {
+      ['find-prev', 'find-next'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = !enabled;
+      });
+    }
+
+    function syncFindBtnState() {
+      const btn = document.getElementById('btn-find');
+      if (btn) btn.classList.toggle('btn-panel-open', findState.open);
+    }
+
+    // 把命中滚到视口中间。
+    // getBoundingClientRect 与 scroller.scrollTop 同在一套坐标系里，
+    // 所以 .zoom-canvas 上的 CSS zoom 不影响这里的换算。
+    function scrollMarkIntoView(mark) {
+      const scroller = document.getElementById('preview-scroll');
+      if (!scroller || !mark) return;
+      const mr = mark.getBoundingClientRect();
+      const sr = scroller.getBoundingClientRect();
+      const opts = {
+        top: Math.max(0, scroller.scrollTop + (mr.top - sr.top) - scroller.clientHeight / 2 + mr.height / 2),
+        behavior: 'smooth',
+      };
+      // 放大后可能横向溢出，只有命中确实不在视口内才动横向滚动
+      if (mr.left < sr.left + 20 || mr.right > sr.right - 20) {
+        opts.left = Math.max(0, scroller.scrollLeft + (mr.left - sr.left) - scroller.clientWidth / 2 + mr.width / 2);
+      }
+      scroller.scrollTo(opts);
+    }
+
+    // index 可越界，自动首尾循环
+    function gotoFindMatch(index, scroll) {
+      const list = findState.matches;
+      if (!list.length) return;
+      const n = list.length;
+      const idx = ((index % n) + n) % n;
+      if (findState.current >= 0 && list[findState.current]) {
+        list[findState.current].forEach(el => el.classList.remove('current'));
+      }
+      findState.current = idx;
+      list[idx].forEach(el => el.classList.add('current'));
+      if (scroll !== false) scrollMarkIntoView(list[idx][0]);
+      updateFindCount((idx + 1) + '/' + n + (findState.truncated ? '+' : ''));
+    }
+
+    // keepCurrent=true：内容重渲染后重标，尽量停在原来那一条且不滚动视图
+    function runFind(keepCurrent) {
+      clearFindMarks();
+      const prev = keepCurrent ? findState.current : -1;
+      findState.matches = [];
+      findState.current = -1;
+      findState.truncated = false;
+
+      if (!findState.query) { updateFindCount(''); setFindNavEnabled(false); return; }
+
+      let regex;
+      try {
+        regex = buildFindRegex();
+      } catch (err) {
+        updateFindCount('正则无效', true);
+        setFindNavEnabled(false);
+        return;
+      }
+      if (!regex) { updateFindCount(''); setFindNavEnabled(false); return; }
+
+      findState.matches = applyFindMarks(regex);
+      if (!findState.matches.length) {
+        updateFindCount('无结果', true);
+        setFindNavEnabled(false);
+        return;
+      }
+      setFindNavEnabled(true);
+      const idx = prev >= 0 ? Math.min(prev, findState.matches.length - 1) : 0;
+      gotoFindMatch(idx, !keepCurrent);
+    }
+
+    function stepFindMatch(delta) {
+      if (!findState.matches.length) {
+        if (findState.query) runFind(false);
+        return;
+      }
+      gotoFindMatch(findState.current + delta, true);
+    }
+
+    function openFind() {
+      const bar = document.getElementById('find-bar');
+      const input = document.getElementById('find-input');
+      if (!bar || !input) return;
+      findState.open = true;
+      bar.classList.add('open');
+      syncFindBtnState();
+      // 预览区有选中文字就直接拿来当搜索词（和编辑器里 Cmd+F 的习惯一致）
+      const sel = String(window.getSelection ? window.getSelection().toString() : '').trim();
+      if (sel && sel.length <= 200 && sel.indexOf('\\n') === -1) {
+        input.value = sel;
+        findState.query = sel;
+      }
+      input.focus();
+      input.select();
+      if (findState.query) runFind(false);
+    }
+
+    function closeFind() {
+      const bar = document.getElementById('find-bar');
+      findState.open = false;
+      if (bar) bar.classList.remove('open');
+      clearFindMarks();
+      findState.matches = [];
+      findState.current = -1;
+      findState.truncated = false;
+      updateFindCount('');
+      setFindNavEnabled(false);
+      syncFindBtnState();
+    }
+
+    function toggleFindOption(key, btnId) {
+      findState[key] = !findState[key];
+      const btn = document.getElementById(btnId);
+      if (btn) btn.classList.toggle('active', findState[key]);
+      runFind(false);
+      const input = document.getElementById('find-input');
+      if (input) input.focus();
+    }
+
+    // 预览内容重渲染（编辑器里改了 md）后 innerHTML 被整体替换，高亮会丢，这里重标一遍
+    function refreshFindAfterUpdate() {
+      if (!findState.open || !findState.query) return;
+      runFind(true);
+    }
+
+    document.getElementById('btn-find').addEventListener('click', () => {
+      if (findState.open) closeFind(); else openFind();
+    });
+
+    (function initFindBar() {
+      const input = document.getElementById('find-input');
+      if (!input) return;
+      let debounce = null;
+      input.addEventListener('input', () => {
+        findState.query = input.value;
+        clearTimeout(debounce);
+        debounce = setTimeout(() => runFind(false), 150);
+      });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          clearTimeout(debounce);
+          // 还没来得及跑防抖的那一次，先补上
+          if (findState.query !== input.value) { findState.query = input.value; runFind(false); return; }
+          stepFindMatch(e.shiftKey ? -1 : 1);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          closeFind();
+        }
+      });
+      document.getElementById('find-prev').addEventListener('click', () => stepFindMatch(-1));
+      document.getElementById('find-next').addEventListener('click', () => stepFindMatch(1));
+      document.getElementById('find-close').addEventListener('click', closeFind);
+      document.getElementById('find-case').addEventListener('click', () => toggleFindOption('caseSensitive', 'find-case'));
+      document.getElementById('find-regex').addEventListener('click', () => toggleFindOption('useRegex', 'find-regex'));
+    })();
+
+    // 全局快捷键：Ctrl/Cmd+F 开搜索、F3 / Shift+F3 上下跳、Esc 关闭
+    document.addEventListener('keydown', (e) => {
+      const key = String(e.key || '').toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 'f') {
+        // 正在别的输入框里打字（样式面板 CSS、标题、AI 文案…）就不抢焦点
+        const ae = document.activeElement;
+        const typing = ae && ae !== document.getElementById('find-input') &&
+          (ae.tagName === 'TEXTAREA' || (ae.tagName === 'INPUT' && !/^(checkbox|radio|button|range)$/i.test(ae.type || 'text')));
+        if (typing) return;
+        e.preventDefault();
+        openFind();
+        return;
+      }
+      if (key === 'f3') {
+        e.preventDefault();
+        if (!findState.open) { openFind(); return; }
+        stepFindMatch(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (key === 'escape' && findState.open) {
+        e.preventDefault();
+        closeFind();
+      }
     });
 
     // 主题切换
@@ -5287,6 +5737,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           if (coverTitleInput && !coverTitleInput.value && currentTitle) { coverTitleInput.value = currentTitle; if(typeof coverApplyPreview==='function') try{ coverApplyPreview(); }catch(_){} }
           // 内容更新后同步重建目录
           if (panelState.tocPanelOpen) buildToc();
+          // 高亮被 innerHTML 覆盖掉了，按当前搜索词重新标一遍
+          refreshFindAfterUpdate();
           break;
         }
 
