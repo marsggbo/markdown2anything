@@ -2,7 +2,7 @@
   "name": "markdown2anything",
   "displayName": "Markdown2Anything — 一篇 Markdown 一键发到微信/知乎/小红书/Twitter",
   "description": "写完一篇 Markdown，一键发布到微信公众号、知乎、小红书、Twitter(X)：自动截长图、AI 生成平台文案与串推、自动传图填字。支持 LaTeX 公式、10 套主题、实时预览。",
-  "version": "3.4.2",
+  "version": "3.4.3",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",
@@ -145,6 +145,16 @@
           "type": "string",
           "default": "gpt-4o-mini",
           "description": "文案生成用的模型名，如 deepseek-chat、gpt-4o、claude-sonnet-4 等。"
+        },
+        "markdown2anything.llm.profiles": {
+          "type": "string",
+          "default": "[]",
+          "description": "已保存的 LLM 多配置列表（JSON 字符串，由插件内部维护，请勿手改）。"
+        },
+        "markdown2anything.llm.activeProfile": {
+          "type": "string",
+          "default": "",
+          "description": "当前激活的 LLM 配置 ID（由插件内部维护，请勿手改）。"
         },
         "markdown2anything.twitter.backend": {
           "type": "string",

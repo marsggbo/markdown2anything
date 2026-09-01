@@ -860,10 +860,11 @@ async function handleWebviewMessage(msg, panel, mdPath) {
           // 多 Profile 存储
           const profiles = getLlmProfilesData();
           const existing = profiles.find(p => p.id === profileId);
+          const baseUrl  = typeof msg.baseUrl === 'string' ? msg.baseUrl.trim() : (existing?.baseUrl || '');
           const profileData = {
             id: profileId,
             name: (msg.profileName || '').trim() || profileId,
-            baseUrl: typeof msg.baseUrl === 'string' ? msg.baseUrl.trim() : (existing?.baseUrl || ''),
+            baseUrl,
             model:   typeof msg.model   === 'string' ? msg.model.trim()   : (existing?.model   || ''),
             savedAt: Date.now(),
           };
@@ -871,11 +872,20 @@ async function handleWebviewMessage(msg, panel, mdPath) {
           else profiles.push(profileData);
           await cfg.update('llm.profiles', JSON.stringify(profiles), vscode.ConfigurationTarget.Global);
           await cfg.update('llm.activeProfile', profileId, vscode.ConfigurationTarget.Global);
+          const sk = LLM_PROFILE_SECRET_PREFIX + profileId;
           if (typeof msg.apiKey === 'string') {
+            // 用户显式填了 key：非空则存，空串则清除
             const k = msg.apiKey.trim();
-            const sk = LLM_PROFILE_SECRET_PREFIX + profileId;
             if (k) await extContext.secrets.store(sk, k);
             else   await extContext.secrets.delete(sk);
+          } else if (!(await extContext.secrets.get(sk))) {
+            // 未填 key 且本配置还没有 key：自动复用同 baseUrl（同端点）已有配置的 key，
+            // 这样换 model / 新建同端点配置无需重复填 key
+            const src = profiles.find(p => p.id !== profileId && p.baseUrl === baseUrl && p.id);
+            if (src) {
+              const inherit = await getLlmProfileApiKey(src.id);
+              if (inherit) await extContext.secrets.store(sk, inherit);
+            }
           }
         } else {
           // 兼容旧版（无 profileId）
@@ -1494,6 +1504,13 @@ async function getLlmProfileApiKey(profileId) {
   return (await extContext.secrets.get(LLM_PROFILE_SECRET_PREFIX + profileId)) || '';
 }
 
+/** key 指纹（仅显示用，不泄露明文）：sk-or…aB3f */
+function keyFingerprint(k) {
+  if (!k) return '';
+  if (k.length <= 8) return '••••' + k.slice(-2);
+  return k.slice(0, 4) + '…' + k.slice(-4);
+}
+
 /** 每个平台最近一次的发布 job 文件，用于「从断点继续发布」 */
 const lastJobFile = { xiaohongshu: null, twitter: null, zhihu: null };
 
@@ -1533,7 +1550,7 @@ async function getLlmConfigForView() {
   for (const p of rawProfiles) {
     const apiKey = await getLlmProfileApiKey(p.id);
     profiles.push({ id: p.id, name: p.name, baseUrl: p.baseUrl, model: p.model,
-                    hasKey: !!apiKey, keyOptional: llm.isLocalEndpoint(p.baseUrl) });
+                    hasKey: !!apiKey, keyHint: keyFingerprint(apiKey), keyOptional: llm.isLocalEndpoint(p.baseUrl) });
   }
   const active = profiles.find(p => p.id === activeId);
   let baseUrl, model, hasKey;
@@ -4033,7 +4050,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         <label style="margin-top:8px;">模型名</label>
         <input type="text" id="global-llm-model" placeholder="deepseek-chat">
         <label style="margin-top:8px;">API Key <span style="color:#3ddc84;font-weight:normal;">（存入系统钥匙串，不落明文）</span></label>
-        <input type="password" id="global-llm-key" placeholder="留空则保持不变；本地 Ollama 无需填">
+        <input type="password" id="global-llm-key" placeholder="留空则复用同接口地址已有 Key；本地 Ollama 无需填">
         <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap;">
           <button class="btn btn-primary" id="global-llm-save" style="flex:1;">保存并使用</button>
           <button class="btn btn-secondary" id="global-llm-test">测试</button>
@@ -6272,8 +6289,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       if (formLbl) formLbl.textContent = activeId ? '修改配置' : '添加配置';
       list.innerHTML = profiles.map(function(p) {
         const isActive = p.id === activeId;
-        const keyLabel = p.hasKey ? '✓ Key 已存' : (p.keyOptional ? '免 Key（本地）' : '⚠ 无 Key');
+        const keyLabel = p.hasKey ? '🔑 ' + (p.keyHint || 'Key 已存') : (p.keyOptional ? '免 Key（本地）' : '⚠ 无 Key');
         const keyColor = p.hasKey ? '#3ddc84' : (p.keyOptional ? '#4ea1ff' : '#ffb020');
+        const keyTip   = p.hasKey ? '此配置使用 Key: ' + (p.keyHint || '…') + '（留空保存将复用同接口地址已有 Key）' : (p.keyOptional ? '本地端点无需 Key' : '未填写 Key，留空保存将复用同接口地址已有 Key');
         const modelShort = (p.model || '').split('/').pop().slice(0, 28);
         const activeCls = isActive ? ' llm-profile-active' : '';
         const host = (p.baseUrl || '').split('://').pop().split('/')[0];
@@ -6288,7 +6306,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           + '</div>'
           + '<div class="llm-profile-actions">'
           + '<button class="llm-profile-test" data-pid="' + p.id + '" title="测试此配置的连接">测试连接</button>'
-          + '<span style="font-size:11px;color:' + keyColor + ';">' + keyLabel + '</span>'
+          + '<span style="font-size:11px;color:' + keyColor + ';cursor:default;" title="' + keyTip + '">' + keyLabel + '</span>'
           + '<button class="llm-profile-edit" data-pid="' + p.id + '">编辑</button>'
           + '<button class="llm-profile-del" data-pid="' + p.id + '" title="删除">🗑</button>'
           + '</div>'
