@@ -855,46 +855,39 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     case 'llmSaveConfig': {
       try {
         const cfg = vscode.workspace.getConfiguration('markdown2anything');
-        const profileId = (msg.profileId || '').trim();
-        if (profileId) {
-          // 多 Profile 存储
-          const profiles = getLlmProfilesData();
-          const existing = profiles.find(p => p.id === profileId);
-          const baseUrl  = typeof msg.baseUrl === 'string' ? msg.baseUrl.trim() : (existing?.baseUrl || '');
-          const profileData = {
-            id: profileId,
-            name: (msg.profileName || '').trim() || profileId,
-            baseUrl,
-            model:   typeof msg.model   === 'string' ? msg.model.trim()   : (existing?.model   || ''),
-            savedAt: Date.now(),
-          };
-          if (existing) Object.assign(existing, profileData);
-          else profiles.push(profileData);
-          await cfg.update('llm.profiles', JSON.stringify(profiles), vscode.ConfigurationTarget.Global);
-          await cfg.update('llm.activeProfile', profileId, vscode.ConfigurationTarget.Global);
-          const sk = LLM_PROFILE_SECRET_PREFIX + profileId;
-          if (typeof msg.apiKey === 'string') {
-            // 用户显式填了 key：非空则存，空串则清除
-            const k = msg.apiKey.trim();
-            if (k) await extContext.secrets.store(sk, k);
-            else   await extContext.secrets.delete(sk);
-          } else if (!(await extContext.secrets.get(sk))) {
-            // 未填 key 且本配置还没有 key：自动复用同 baseUrl（同端点）已有配置的 key，
-            // 这样换 model / 新建同端点配置无需重复填 key
-            const src = profiles.find(p => p.id !== profileId && p.baseUrl === baseUrl && p.id);
-            if (src) {
-              const inherit = await getLlmProfileApiKey(src.id);
-              if (inherit) await extContext.secrets.store(sk, inherit);
-            }
-          }
-        } else {
-          // 兼容旧版（无 profileId）
-          if (typeof msg.baseUrl === 'string') await cfg.update('llm.baseUrl', msg.baseUrl.trim(), vscode.ConfigurationTarget.Global);
-          if (typeof msg.model   === 'string') await cfg.update('llm.model',   msg.model.trim(),   vscode.ConfigurationTarget.Global);
-          if (typeof msg.apiKey  === 'string') {
-            const k = msg.apiKey.trim();
-            if (k) await extContext.secrets.store(LLM_SECRET_KEY, k);
-            else   await extContext.secrets.delete(LLM_SECRET_KEY);
+        // 未传 profileId（新建）→ 生成唯一 ID，保证所有历史配置都能保存、不被覆盖
+        let profileId = (msg.profileId || '').trim();
+        if (!profileId) profileId = 'p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+        // 多 Profile 存储
+        const profiles = getLlmProfilesData();
+        const existing = profiles.find(p => p.id === profileId);
+        const baseUrl  = typeof msg.baseUrl === 'string' ? msg.baseUrl.trim() : (existing?.baseUrl || '');
+        const profileData = {
+          id: profileId,
+          name: (msg.profileName || '').trim() || profileId,
+          baseUrl,
+          model:   typeof msg.model   === 'string' ? msg.model.trim()   : (existing?.model   || ''),
+          savedAt: Date.now(),
+        };
+        if (existing) Object.assign(existing, profileData);
+        else profiles.push(profileData);
+        await cfg.update('llm.profiles', JSON.stringify(profiles), vscode.ConfigurationTarget.Global);
+        await cfg.update('llm.activeProfile', profileId, vscode.ConfigurationTarget.Global);
+        const sk = LLM_PROFILE_SECRET_PREFIX + profileId;
+        if (typeof msg.apiKey === 'string') {
+          // 用户显式填了 key：非空则存，空串则清除
+          const k = msg.apiKey.trim();
+          if (k) await extContext.secrets.store(sk, k);
+          else   await extContext.secrets.delete(sk);
+        } else if (!(await extContext.secrets.get(sk))) {
+          // 未填 key 且本配置还没有 key：自动复用同平台（同端点优先，其次同 host）已有配置的 key，
+          // 这样同平台换模型/新建配置无需重复填 key；不同平台的 key 不互相复用
+          const host = llmHostOf(baseUrl);
+          const src = profiles.find(p => p.id !== profileId && p.baseUrl === baseUrl && p.id)
+                   || profiles.find(p => p.id !== profileId && host && host === llmHostOf(p.baseUrl) && p.id);
+          if (src) {
+            const inherit = await getLlmProfileApiKey(src.id);
+            if (inherit) await extContext.secrets.store(sk, inherit);
           }
         }
         panel.webview.postMessage({ type: 'llmConfigSaved', llm: await getLlmConfigForView() });
@@ -951,9 +944,12 @@ async function handleWebviewMessage(msg, panel, mdPath) {
           const baseUrl = msg.baseUrl.trim();
           const model   = msg.model.trim();
           let apiKey = typeof msg.apiKey === 'string' ? msg.apiKey.trim() : '';
-          // key 留空时自动复用同接口地址（同端点）已有配置的 key，与保存逻辑一致
+          // key 留空时自动复用同平台已有配置的 key（同端点优先，其次同 host），与保存逻辑一致
           if (!apiKey) {
-            const src = getLlmProfilesData().find(p => p.baseUrl === baseUrl);
+            const profiles = getLlmProfilesData();
+            const host = llmHostOf(baseUrl);
+            const src = profiles.find(p => p.baseUrl === baseUrl && p.id)
+                     || profiles.find(p => host && host === llmHostOf(p.baseUrl) && p.id);
             if (src) apiKey = await getLlmProfileApiKey(src.id);
           }
           // 还没有的话再回退历史遗留扁平配置的 key（旧版 llm.apiKey）
@@ -991,8 +987,8 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     // 拉取 OpenRouter 当前可用的免费模型（带 :free 后缀），用于「免费模型」快捷选择
     case 'llmFetchFreeModels': {
       try {
-        const models = await fetchOpenRouterFreeModels();
-        panel.webview.postMessage({ type: 'llmFreeModels', models });
+        const models = await fetchOpenRouterFreeModels(msg.force === true);
+        panel.webview.postMessage({ type: 'llmFreeModels', models, fetchedAt: llmFreeModelsFetchedAt(), forced: msg.force === true });
       } catch (e) {
         panel.webview.postMessage({ type: 'llmFreeModels', models: [], error: e.message });
       }
@@ -1531,6 +1527,8 @@ async function handleWebviewMessage(msg, panel, mdPath) {
 // ─── LLM 配置（Key 走 SecretStorage / 系统钥匙串） ───────────────
 const LLM_SECRET_KEY = 'markdown2anything.llm.apiKey';
 const LLM_PROFILE_SECRET_PREFIX = 'markdown2anything.llm.apiKey.';
+const LLM_FREE_MODELS_CACHE_KEY = 'llm.freeModelsCache';
+const LLM_FREE_MODELS_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 免费模型列表缓存 7 天
 
 function getLlmProfilesData() {
   const cfg = vscode.workspace.getConfiguration('markdown2anything');
@@ -1546,6 +1544,12 @@ function keyFingerprint(k) {
   if (!k) return '';
   if (k.length <= 8) return '••••' + k.slice(-2);
   return k.slice(0, 4) + '…' + k.slice(-4);
+}
+
+/** 从 baseUrl 提取主机名（平台），如 https://openrouter.ai/api/v1 → openrouter.ai */
+function llmHostOf(url) {
+  const s = String(url || '').replace(/^[a-z]+:\/\//i, '').split('/')[0];
+  return s || '';
 }
 
 /** 每个平台最近一次的发布 job 文件，用于「从断点继续发布」 */
@@ -1613,9 +1617,19 @@ async function getLlmConfigForView() {
 /**
  * 拉取 OpenRouter 当前可用的免费模型列表（官方 /api/v1/models，无需鉴权）。
  * 只返回带 :free 后缀、且免费定价（prompt/completion 均为 0）的模型。
+ * 结果缓存到 globalState，7 天内不重复拉取；force=true 时强制刷新。
+ * @param {boolean} [force]
  * @returns {Promise<Array<{id:string, name:string, context_length:number}>>}
  */
-function fetchOpenRouterFreeModels() {
+function fetchOpenRouterFreeModels(force) {
+  // 缓存命中（且非强制刷新）→ 直接返回
+  let cached;
+  try { cached = extContext.globalState.get(LLM_FREE_MODELS_CACHE_KEY); } catch (_) { cached = undefined; }
+  if (!force && cached && cached.fetchedAt &&
+      (Date.now() - cached.fetchedAt) < LLM_FREE_MODELS_TTL_MS &&
+      Array.isArray(cached.models) && cached.models.length) {
+    return Promise.resolve(cached.models);
+  }
   return new Promise((resolve, reject) => {
     const req = https.request({
       hostname: 'openrouter.ai',
@@ -1636,6 +1650,8 @@ function fetchOpenRouterFreeModels() {
               name: m.name || m.id,
               context_length: m.context_length || 0,
             }));
+          // 拉取成功 → 写缓存
+          try { extContext.globalState.update(LLM_FREE_MODELS_CACHE_KEY, { fetchedAt: Date.now(), models: free }); } catch (_) {}
           resolve(free);
         } catch (e) { reject(new Error('解析 OpenRouter 模型列表失败')); }
       });
@@ -1644,6 +1660,14 @@ function fetchOpenRouterFreeModels() {
     req.setTimeout(20000, () => { req.destroy(); reject(new Error('拉取免费模型列表超时（请检查网络）')); });
     req.end();
   });
+}
+
+/** 上次成功拉取免费模型的时间戳（用于 UI 显示「缓存于 X 分钟前」） */
+function llmFreeModelsFetchedAt() {
+  try {
+    const c = extContext.globalState.get(LLM_FREE_MODELS_CACHE_KEY);
+    return c && c.fetchedAt ? c.fetchedAt : 0;
+  } catch (_) { return 0; }
 }
 
 // ─── 文案持久化：存到文章同目录，切换/重开不用重新生成，也便于随文章一起备份 ───
@@ -2723,6 +2747,17 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     .llm-profile-active .llm-profile-name { color:#3ddc84; }
     .llm-profile-badge { font-size:10px; padding:1px 6px; border-radius:10px; background:#2a4a2a; color:#3ddc84; }
     .llm-profile-meta { color:#777; font-size:11px; margin-bottom:6px; line-height:1.5; }
+    /* 平台 > token > 模型 三级分组 */
+    .llm-plat-group { margin-bottom:10px; border:1px solid #3a3a3a; border-radius:8px; overflow:hidden; background:#1e1e1e; }
+    .llm-plat-head { display:flex; align-items:center; justify-content:space-between; padding:7px 11px; background:#262626; font-size:12.5px; font-weight:700; color:#ddd; border-bottom:1px solid #333; }
+    .llm-plat-count { font-size:10.5px; color:#888; font-weight:600; }
+    .llm-token-group { border-bottom:1px dashed #2f2f2f; }
+    .llm-token-group:last-child { border-bottom:none; }
+    .llm-token-head { display:flex; align-items:center; justify-content:space-between; padding:4px 11px; font-size:11px; color:#4fc3f7; background:#1a1a1a; }
+    .llm-token-count { font-size:10px; color:#666; }
+    .llm-token-group .llm-profile-row { border:1px solid transparent; border-radius:6px; margin:4px 7px; background:#242424; }
+    .llm-token-group .llm-profile-row:hover { border-color:#555; background:#2a2a2a; }
+    .llm-token-group .llm-profile-row.llm-profile-active { background:#192819; border-color:#3a6a3a; }
     /* 连接状态徽标 */
     .llm-status { font-size:10px; padding:1px 7px; border-radius:10px; font-weight:600; flex-shrink:0; }
     .llm-status-ok       { background:#1e3a2a; color:#3ddc84; }
@@ -4116,7 +4151,10 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         </div>
 
         <!-- 添加 / 修改表单 -->
-        <div style="font-size:10px;font-weight:700;color:#666;letter-spacing:.8px;text-transform:uppercase;margin-bottom:8px;" id="llm-form-label">添加配置</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+          <div style="font-size:10px;font-weight:700;color:#666;letter-spacing:.8px;text-transform:uppercase;" id="llm-form-label">添加配置</div>
+          <button class="btn btn-secondary" id="global-llm-new" style="font-size:10.5px;padding:2px 9px;display:none;" title="结束编辑，开始新建一个配置">＋ 新建配置</button>
+        </div>
         <label style="margin-top:0;">快速预设</label>
         <select id="global-llm-preset" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;">
           <option value="">— 选择预设 —</option>
@@ -4134,8 +4172,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         <label style="margin-top:8px;">模型名</label>
         <input type="text" id="global-llm-model" placeholder="deepseek-chat">
         <div style="margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-          <button class="btn btn-secondary" id="global-llm-free-btn" title="一键拉取 OpenRouter 当前可用的免费模型（带 :free 后缀）">🎁 OpenRouter 免费模型</button>
-          <span style="font-size:11px;color:#888;">点一下自动填好接口地址和模型名</span>
+          <button class="btn btn-secondary" id="global-llm-free-btn" title="一键拉取 OpenRouter 当前可用的免费模型（带 :free 后缀）">🎁 免费模型</button>
+          <button class="btn btn-secondary" id="global-llm-free-refresh" title="强制刷新免费模型列表（默认 7 天缓存）" style="display:none;">↻ 刷新</button>
+          <span id="global-llm-free-cache" style="font-size:10.5px;color:#777;"></span>
         </div>
         <div id="global-llm-free-list" style="display:none;margin-top:8px;max-height:180px;overflow-y:auto;background:#222;border:1px solid #444;border-radius:6px;padding:6px;"></div>
         <label style="margin-top:8px;">API Key <span style="color:#3ddc84;font-weight:normal;">（存入系统钥匙串，不落明文）</span></label>
@@ -4953,8 +4992,10 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       const apiKey       = (document.getElementById('global-llm-key')   || {}).value || undefined;
       const preset       = (document.getElementById('global-llm-preset')|| {}).value || '';
       const customName   = (document.getElementById('global-llm-name')  || {}).value.trim();
-      const profileId    = preset || 'custom';
-      const profileName  = customName || preset || baseUrl;
+      // 编辑已有配置 → 复用其 id；新建 → 留空由后端生成唯一 id（不再互相覆盖）
+      const editingId    = window._llmEditingId || '';
+      const profileId    = editingId;
+      const profileName  = customName || preset || baseUrl || model;
       vscode.postMessage({ type: 'llmSaveConfig', baseUrl, model, apiKey, profileId, profileName });
     });
     document.getElementById('global-llm-test').addEventListener('click', () => {
@@ -4967,17 +5008,40 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       vscode.postMessage({ type: 'llmTestConnection', baseUrl, model, apiKey });
     });
     document.getElementById('global-llm-clear').addEventListener('click', () => {
-      const preset = (document.getElementById('global-llm-preset') || {}).value || '';
-      const profileId = preset || 'custom';
-      vscode.postMessage({ type: 'llmSaveConfig', profileId, apiKey: '' });
+      // 清除当前编辑中（或激活）配置的 key
+      const editingId = window._llmEditingId || window._m2aActiveProfileId || '';
+      vscode.postMessage({ type: 'llmSaveConfig', profileId: editingId, apiKey: '' });
     });
-    // 🎁 OpenRouter 免费模型：拉取并展示，点选自动填好接口地址 + 模型名
-    const freeBtn  = document.getElementById('global-llm-free-btn');
-    const freeList = document.getElementById('global-llm-free-list');
+    // 「＋ 新建配置」：结束编辑状态，清空表单
+    const llmNewBtn = document.getElementById('global-llm-new');
+    if (llmNewBtn) llmNewBtn.addEventListener('click', () => {
+      window._llmEditingId = '';
+      ['global-llm-name','global-llm-base','global-llm-model','global-llm-key'].forEach(function(id){
+        const el = document.getElementById(id); if (el) el.value = '';
+      });
+      const psel = document.getElementById('global-llm-preset'); if (psel) psel.value = '';
+      const lbl = document.getElementById('llm-form-label'); if (lbl) lbl.textContent = '添加配置';
+      llmNewBtn.style.display = 'none';
+      const fl = document.getElementById('global-llm-free-list'); if (fl) fl.style.display = 'none';
+      const fr = document.getElementById('global-llm-result'); if (fr) { fr.textContent = ''; }
+    });
+    // 🎁 OpenRouter 免费模型：拉取并展示（7 天缓存），点选自动填好接口地址 + 模型名
+    const freeBtn     = document.getElementById('global-llm-free-btn');
+    const freeRefresh = document.getElementById('global-llm-free-refresh');
+    const freeList    = document.getElementById('global-llm-free-list');
+    const freeCache   = document.getElementById('global-llm-free-cache');
     if (freeBtn) freeBtn.addEventListener('click', () => {
-      freeBtn.textContent = '⏳ 正在拉取免费模型…';
+      freeBtn.textContent = '⏳ 正在拉取…';
       freeBtn.disabled = true;
+      if (freeRefresh) freeRefresh.style.display = 'none';
+      if (freeCache) freeCache.textContent = '';
       vscode.postMessage({ type: 'llmFetchFreeModels' });
+    });
+    if (freeRefresh) freeRefresh.addEventListener('click', () => {
+      freeRefresh.style.display = 'none';
+      if (freeCache) freeCache.textContent = '';
+      if (freeBtn) { freeBtn.textContent = '⏳ 正在刷新…'; freeBtn.disabled = true; }
+      vscode.postMessage({ type: 'llmFetchFreeModels', force: true });
     });
     if (freeList) freeList.addEventListener('click', (e) => {
       const item = e.target.closest('[data-slug]');
@@ -6358,8 +6422,11 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         const model  = document.getElementById('global-llm-model');
         const nameEl = document.getElementById('global-llm-name');
         const result = document.getElementById('global-llm-result');
-        // 优先使用已保存的该预设配置（上一次的配置）
-        const saved = (_llmProfilesCache || []).find(function(s){ return s.id === presetKey; });
+        // 优先使用已保存的该平台配置（按 baseUrl 主机匹配），否则用预设默认值
+        const presetHost = llmHostW(p.baseUrl);
+        const saved = (_llmProfilesCache || []).find(function(s){
+          return presetHost && llmHostW(s.baseUrl) === presetHost;
+        });
         if (saved) {
           if (base)   base.value   = saved.baseUrl || p.baseUrl;
           if (model)  model.value  = saved.model   || p.model;
@@ -6394,45 +6461,84 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       return '<span class="llm-status llm-status-untested">○ 未测试</span>';
     }
 
+    // webview 端 host 提取（与后端 llmHostOf 一致），用于平台分组
+    function llmHostW(url) {
+      return String(url || '').replace(/^[a-z]+:\\/\\//i, '').split('/')[0] || '';
+    }
+
+    // 一个 token 组的标签：有 key 显示指纹；本地端点显示免 Key；无 key 显示警告
+    function llmTokenLabel(p) {
+      if (p.hasKey)   return '🔑 ' + (p.keyHint || 'Key 已存');
+      if (p.keyOptional) return '🖥 免 Key（本地）';
+      return '⚠ 无 Key';
+    }
+
     function renderLlmProfiles(profiles, activeId) {
       _activeProfileId = activeId || '';
+      window._m2aActiveProfileId = activeId || '';
       const section = $('llm-profiles-section');
       const list    = $('llm-profiles-list');
       const formLbl = $('llm-form-label');
+      const newBtn  = $('global-llm-new');
       if (!section || !list) return;
       if (!profiles || !profiles.length) { section.style.display = 'none'; return; }
       section.style.display = '';
-      if (formLbl) formLbl.textContent = activeId ? '修改配置' : '添加配置';
-      list.innerHTML = profiles.map(function(p) {
-        const isActive = p.id === activeId;
-        const keyLabel = p.hasKey ? '🔑 ' + (p.keyHint || 'Key 已存') : (p.keyOptional ? '免 Key（本地）' : '⚠ 无 Key');
-        const keyColor = p.hasKey ? '#3ddc84' : (p.keyOptional ? '#4ea1ff' : '#ffb020');
-        const keyTip   = p.hasKey ? '此配置使用 Key: ' + (p.keyHint || '…') + '（留空保存将复用同接口地址已有 Key）' : (p.keyOptional ? '本地端点无需 Key' : '未填写 Key，留空保存将复用同接口地址已有 Key');
-        const modelShort = (p.model || '').split('/').pop().slice(0, 28);
-        const activeCls = isActive ? ' llm-profile-active' : '';
-        const host = (p.baseUrl || '').split('://').pop().split('/')[0];
-        return '<div class="llm-profile-row' + activeCls + '" data-pid="' + p.id + '" data-tip="点击切换到「' + (p.name || p.id) + '」">'
-          + '<div class="llm-profile-header">'
-          + '<span class="llm-profile-name">' + (p.name || p.id) + (isActive ? ' <span class="llm-profile-badge">使用中</span>' : '') + '</span>'
-          + llmStatusUi(p)
-          + '</div>'
-          + '<div class="llm-profile-meta">'
-          + (modelShort || '—') + '&nbsp;&nbsp;<span style="color:#555;">|</span>&nbsp;&nbsp;'
-          + (host || '—')
-          + '</div>'
-          + '<div class="llm-profile-actions">'
-          + '<button class="llm-profile-test" data-pid="' + p.id + '" title="测试此配置的连接">测试连接</button>'
-          + '<span style="font-size:11px;color:' + keyColor + ';cursor:default;" title="' + keyTip + '">' + keyLabel + '</span>'
-          + '<button class="llm-profile-edit" data-pid="' + p.id + '">编辑</button>'
-          + '<button class="llm-profile-del" data-pid="' + p.id + '" title="删除此配置">🗑 删除</button>'
-          + '</div>'
-          + '</div>';
-      }).join('');
+      const editing = window._llmEditingId || '';
+      if (formLbl) formLbl.textContent = editing ? '修改配置' : '添加配置';
+      if (newBtn)  newBtn.style.display  = editing ? '' : 'none';
+      // ── 三级分组：平台(host) > token(key) > 模型 ──
+      const byHost = {};   // host -> { tokenKey -> { label, list:[profile] } }
+      for (const p of profiles) {
+        const host = llmHostW(p.baseUrl) || '其他平台';
+        if (!byHost[host]) byHost[host] = {};
+        const tk = p.hasKey ? ('k:' + (p.keyHint || 'key')) : (p.keyOptional ? 'local' : 'nokey');
+        if (!byHost[host][tk]) byHost[host][tk] = { label: llmTokenLabel(p), list: [] };
+        byHost[host][tk].list.push(p);
+      }
+      let html = '';
+      Object.keys(byHost).sort().forEach(function(host){
+        const tokens = byHost[host];
+        let modelCount = 0;
+        Object.keys(tokens).forEach(function(tk){ modelCount += tokens[tk].list.length; });
+        html += '<div class="llm-plat-group">'
+          + '<div class="llm-plat-head">🌐 ' + host + ' <span class="llm-plat-count">' + modelCount + ' 个模型</span></div>';
+        Object.keys(tokens).forEach(function(tk){
+          const g = tokens[tk];
+          html += '<div class="llm-token-group">'
+            + '<div class="llm-token-head">' + g.label + ' <span class="llm-token-count">' + g.list.length + ' 个</span></div>';
+          g.list.forEach(function(p){
+            const isActive = p.id === activeId;
+            const modelShort = (p.model || '').split('/').pop().slice(0, 30);
+            const activeCls = isActive ? ' llm-profile-active' : '';
+            html += '<div class="llm-profile-row' + activeCls + '" data-pid="' + p.id + '" data-tip="点击切换到「' + (p.name || p.id) + '」">'
+              + '<div class="llm-profile-header">'
+              + '<span class="llm-profile-name">' + (p.name || p.id) + (isActive ? ' <span class="llm-profile-badge">使用中</span>' : '') + '</span>'
+              + llmStatusUi(p)
+              + '</div>'
+              + '<div class="llm-profile-meta">' + (modelShort || '—') + '</div>'
+              + '<div class="llm-profile-actions">'
+              + '<button class="llm-profile-test" data-pid="' + p.id + '" title="测试此配置的连接">测试连接</button>'
+              + '<button class="llm-profile-edit" data-pid="' + p.id + '">编辑</button>'
+              + '<button class="llm-profile-del" data-pid="' + p.id + '" title="删除此配置">🗑 删除</button>'
+              + '</div>'
+              + '</div>';
+          });
+          html += '</div>';
+        });
+        html += '</div>';
+      });
+      list.innerHTML = html;
       // 整卡点击 = 切换配置（活动卡不切换）
       list.querySelectorAll('.llm-profile-row').forEach(function(row) {
         row.addEventListener('click', function() {
           const pid = row.dataset.pid;
-          if (pid && pid !== _activeProfileId) vscode.postMessage({ type:'llmSwitchProfile', profileId: pid });
+          if (pid && pid !== _activeProfileId) {
+            // 切换配置时退出编辑态（避免表单回填后仍指向旧配置）
+            window._llmEditingId = '';
+            const lbl = $('llm-form-label'); if (lbl) lbl.textContent = '添加配置';
+            const nb  = $('global-llm-new');  if (nb)  nb.style.display  = 'none';
+            vscode.postMessage({ type:'llmSwitchProfile', profileId: pid });
+          }
         });
       });
       list.querySelectorAll('.llm-profile-test').forEach(function(btn) {
@@ -6449,6 +6555,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           const pid = btn.dataset.pid;
           const full = (_llmProfilesCache || []).find(function(p){ return p.id === pid; });
           if (!full) return;
+          window._llmEditingId = pid;   // 进入编辑状态：保存时复用该 id
+          const lbl = $('llm-form-label'); if (lbl) lbl.textContent = '修改配置';
+          const nb  = $('global-llm-new');  if (nb)  nb.style.display  = '';
           const nameEl = $('global-llm-name');
           const base   = $('global-llm-base');
           const mdl    = $('global-llm-model');
@@ -6456,7 +6565,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           if (nameEl) nameEl.value = full.name || '';
           if (base)   base.value  = full.baseUrl || '';
           if (mdl)    mdl.value   = full.model || '';
-          if (psel)   psel.value  = Object.prototype.hasOwnProperty.call(PRESETS, pid) ? pid : '';
+          if (psel)   psel.value  = '';
           const nameInput = $('global-llm-name');
           if (nameInput) { nameInput.focus(); nameInput.scrollIntoView({ behavior:'smooth', block:'center' }); }
         });
@@ -6498,10 +6607,19 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           const active = (cfg.profiles || []).find(function(p){ return p.id === cfg.activeProfile; });
           if (active) nameEl.value = active.name || '';
         }
-        // 同步预设选择框到当前激活配置
+        // 同步预设选择框到当前激活配置（按 baseUrl 主机匹配预设）
         const psel = $('global-llm-preset');
         if (psel && cfg.activeProfile) {
-          psel.value = Object.prototype.hasOwnProperty.call(PRESETS, cfg.activeProfile) ? cfg.activeProfile : '';
+          const active = (cfg.profiles || []).find(function(p){ return p.id === cfg.activeProfile; });
+          let match = '';
+          if (active) {
+            const activeHost = llmHostW(active.baseUrl);
+            Object.keys(PRESETS).forEach(function(k){
+              const pr = PRESETS[k];
+              if (pr.baseUrl && activeHost && llmHostW(pr.baseUrl) === activeHost) match = k;
+            });
+          }
+          psel.value = match;
         }
       }
       renderLlmProfiles(cfg.profiles, cfg.activeProfile);
@@ -6862,15 +6980,18 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     window.addEventListener('message', ({ data: msg })=>{
       // LLM 配置类消息与平台无关，广播给所有已注册的块
       if(msg.type==='llmConfig' || msg.type==='llmConfigSaved'){
-        if(msg.type==='llmConfig') _llmProfileStatus = {}; // 面板首次打开，重置连接状态
+        if(msg.type==='llmConfig'){ _llmProfileStatus = {}; window._llmEditingId = ''; } // 面板首次打开，重置连接状态与编辑态
         for(const pf of Object.values(registered)) applyLlmState(pf, msg.llm);
         // llmConfig = 面板初次打开，允许回填表单；llmConfigSaved = 操作后刷新，只更新列表
         applyLlmStateGlobal(msg.llm, { init: msg.type==='llmConfig' });
         if(msg.type==='llmConfigSaved'){
           window._m2a_formTouched = false;
+          window._llmEditingId = '';   // 保存后退出编辑态：下次保存是新建（唯一 id）
           const gr=$('global-llm-result');
           if(gr){ gr.style.color='#3ddc84'; gr.textContent='✅ 已保存'; }
           const gk=$('global-llm-key'); if(gk) gk.value='';
+          const lbl=$('llm-form-label'); if(lbl) lbl.textContent='添加配置';
+          const nb=$('global-llm-new');  if(nb)  nb.style.display='none';
         }
         return;
       }
@@ -6885,7 +7006,15 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       if(msg.type==='llmFreeModels'){
         const fb = document.getElementById('global-llm-free-btn');
         const fl = document.getElementById('global-llm-free-list');
-        if(fb){ fb.textContent = '🎁 OpenRouter 免费模型'; fb.disabled = false; }
+        const fr = document.getElementById('global-llm-free-refresh');
+        const fc = document.getElementById('global-llm-free-cache');
+        if(fb){ fb.textContent = '🎁 免费模型'; fb.disabled = false; }
+        // 缓存时间提示（成功拉到数据时展示），并露出「刷新」按钮
+        if(fr) fr.style.display = '';
+        if(fc && msg.fetchedAt){
+          const mins = Math.max(1, Math.round((Date.now() - msg.fetchedAt) / 60000));
+          fc.textContent = '缓存于 ' + (mins < 60 ? mins + ' 分钟前' : Math.round(mins/60) + ' 小时前') + ' · ' + (msg.forced ? '已刷新' : '点 🎁 用缓存，↻ 强刷');
+        } else if (fc) fc.textContent = '';
         if(!fl) return;
         if(msg.error){
           fl.innerHTML = '<div style="padding:8px;color:#ff6b6b;font-size:12px;">拉取失败：' + msg.error + '</div>';
