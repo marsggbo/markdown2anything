@@ -956,6 +956,8 @@ async function handleWebviewMessage(msg, panel, mdPath) {
             const src = getLlmProfilesData().find(p => p.baseUrl === baseUrl);
             if (src) apiKey = await getLlmProfileApiKey(src.id);
           }
+          // 还没有的话再回退历史遗留扁平配置的 key（旧版 llm.apiKey）
+          if (!apiKey) apiKey = (await extContext.secrets.get(LLM_SECRET_KEY)) || '';
           config = { baseUrl, model, apiKey };
         } else {
           config = await getLlmConfig();
