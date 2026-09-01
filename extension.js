@@ -934,6 +934,24 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
+    // 测试某个已保存 profile 的连接（用于「配置按钮」显示连接状态）
+    case 'llmTestProfile': {
+      try {
+        const profiles = getLlmProfilesData();
+        const p = profiles.find(x => x.id === msg.profileId);
+        if (!p) {
+          panel.webview.postMessage({ type: 'llmTestProfileResult', profileId: msg.profileId, ok: false, message: '配置不存在' });
+          break;
+        }
+        const apiKey = await getLlmProfileApiKey(p.id);
+        const res = await llm.testConnection({ config: { baseUrl: p.baseUrl, model: p.model, apiKey } });
+        panel.webview.postMessage({ type: 'llmTestProfileResult', profileId: msg.profileId, ok: true, reply: res.reply });
+      } catch (e) {
+        panel.webview.postMessage({ type: 'llmTestProfileResult', profileId: msg.profileId, ok: false, message: e.message });
+      }
+      break;
+    }
+
     case 'socialGenerateCopy': {
       const platform = msg.platform;
       try {
@@ -2540,6 +2558,23 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       padding: 3px 6px;
     }
     .btn-icon { padding: 4px 8px; font-size: 13px; }
+    /* 图标按钮悬浮提示（1 秒延迟，JS 控制显隐） */
+    .m2a-tip {
+      position: fixed;
+      z-index: 99999;
+      background: #333;
+      color: #f0f0f0;
+      font-size: 11.5px;
+      line-height: 1.4;
+      padding: 5px 9px;
+      border-radius: 6px;
+      border: 1px solid #555;
+      box-shadow: 0 3px 10px rgba(0,0,0,.4);
+      pointer-events: none;
+      max-width: 280px;
+      white-space: normal;
+      display: none;
+    }
     /* 发布主操作区：平台按钮放大加粗，作为主要 CTA */
     .toolbar-zone-publish > .dropdown > .btn,
     .toolbar-zone-publish > .btn {
@@ -2579,16 +2614,27 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       padding: 10px 12px;
       font-size: 12px;
       margin-bottom: 6px;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
     }
+    .llm-profile-row:hover { border-color: #555; }
     .llm-profile-row.llm-profile-active { background: #192819; border-color: #3a6a3a; }
     .llm-profile-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
     .llm-profile-name { font-weight:700; font-size:13px; color:#ddd; }
     .llm-profile-active .llm-profile-name { color:#3ddc84; }
     .llm-profile-badge { font-size:10px; padding:1px 6px; border-radius:10px; background:#2a4a2a; color:#3ddc84; }
     .llm-profile-meta { color:#777; font-size:11px; margin-bottom:6px; line-height:1.5; }
+    /* 连接状态徽标 */
+    .llm-status { font-size:10px; padding:1px 7px; border-radius:10px; font-weight:600; flex-shrink:0; }
+    .llm-status-ok       { background:#1e3a2a; color:#3ddc84; }
+    .llm-status-fail     { background:#3a1e24; color:#ff7a7a; }
+    .llm-status-testing  { background:#1e2f3a; color:#4ea1ff; }
+    .llm-status-untested { background:#333; color:#999; }
     .llm-profile-actions { display:flex; gap:5px; align-items:center; flex-wrap:wrap; }
     .llm-profile-use { font-size:11px; padding:2px 10px; background:#0078d4; color:#fff; border:none; border-radius:4px; cursor:pointer; }
     .llm-profile-use:hover { background:#005fa3; }
+    .llm-profile-test { font-size:11px; padding:2px 8px; background:#2d4a2d; color:#7fd97f; border:1px solid #3a6a3a; border-radius:4px; cursor:pointer; }
+    .llm-profile-test:hover { background:#3a5c3a; }
     .llm-profile-edit { font-size:11px; padding:2px 8px; background:#3a3a3a; color:#ccc; border:none; border-radius:4px; cursor:pointer; }
     .llm-profile-edit:hover { background:#4a4a4a; }
     .llm-profile-del { font-size:12px; padding:2px 6px; background:none; color:#666; border:none; cursor:pointer; }
@@ -3279,16 +3325,16 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         ">
           <option value="">主题</option>
         </select>
-        <button class="btn btn-toc" id="btn-toc" title="显示/隐藏文章目录">📑</button>
+        <button class="btn btn-toc" id="btn-toc" data-tip="显示/隐藏文章目录">📑</button>
         <div class="zoom-controls">
-          <button class="btn btn-icon" id="btn-zoom-out" title="缩小（Ctrl+滚轮）">－</button>
+          <button class="btn btn-icon" id="btn-zoom-out" data-tip="缩小预览（按住 Ctrl/Cmd 滚轮）">－</button>
           <span id="zoom-value">100%</span>
-          <button class="btn btn-icon" id="btn-zoom-in" title="放大（Ctrl+滚轮）">＋</button>
-          <button class="btn btn-icon" id="btn-zoom-reset" title="重置缩放">↺</button>
+          <button class="btn btn-icon" id="btn-zoom-in" data-tip="放大预览（按住 Ctrl/Cmd 滚轮）">＋</button>
+          <button class="btn btn-icon" id="btn-zoom-reset" data-tip="重置缩放">↺</button>
         </div>
-        <button class="btn btn-icon" id="btn-sync-to-preview" title="跳到编辑器光标对应的预览位置">→</button>
-        <button class="btn btn-icon" id="btn-sync-to-editor" title="跳到当前预览位置对应的编辑器行">←</button>
-        <button class="btn btn-icon" id="btn-table-mode" title="切换宽表格显示：横向滚动（不撑宽正文）或完整显示（看全表）" style="display:none;">▦ 滚动</button>
+        <button class="btn btn-icon" id="btn-sync-to-preview" data-tip="跳到编辑器光标对应的预览位置">→</button>
+        <button class="btn btn-icon" id="btn-sync-to-editor" data-tip="跳到当前预览位置对应的编辑器行">←</button>
+        <button class="btn btn-icon" id="btn-table-mode" data-tip="切换宽表格显示：横向滚动或完整显示" style="display:none;">▦ 滚动</button>
       </div>
 
       <!-- 区② 发布主操作 -->
@@ -4013,6 +4059,46 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     const vscode = acquireVsCodeApi();
     window.__m2a_vscode = vscode;
 
+    // ─── 图标按钮悬浮提示（悬停 1 秒后显示）───
+    (function () {
+      const tipEl = document.createElement('div');
+      tipEl.className = 'm2a-tip';
+      document.body.appendChild(tipEl);
+      let timer = null;
+      function showTip(el) {
+        const text = el.getAttribute('data-tip');
+        if (!text) return;
+        tipEl.textContent = text;
+        tipEl.style.display = 'block';
+        const r = el.getBoundingClientRect();
+        const tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
+        let left = r.left + r.width / 2 - tw / 2;
+        left = Math.max(4, Math.min(left, window.innerWidth - tw - 4));
+        let top = r.top - th - 8;
+        if (top < 4) top = r.bottom + 8; // 上方放不下就放按钮下方
+        tipEl.style.left = left + 'px';
+        tipEl.style.top  = top + 'px';
+      }
+      function hideTip() { clearTimeout(timer); tipEl.style.display = 'none'; }
+      document.addEventListener('mouseover', (e) => {
+        const el = e.target.closest && e.target.closest('[data-tip]');
+        if (!el) { hideTip(); return; }
+        if (el._m2aTipFor === e) return;
+        el._m2aTipFor = e;
+        hideTip();
+        timer = setTimeout(() => showTip(el), 1000);
+      });
+      document.addEventListener('mouseout', (e) => {
+        const el = e.target.closest && e.target.closest('[data-tip]');
+        if (el) {
+          const to = e.relatedTarget;
+          if (to && to.closest && to.closest('[data-tip]')) return; // 移到按钮内部元素
+        }
+        hideTip();
+      });
+      document.addEventListener('scroll', hideTip, true);
+    })();
+
     // ─── 状态 ───
     let currentTitle = '';
     let currentBodyHtml = '';
@@ -4529,13 +4615,24 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       more:    document.getElementById('menu-more'),
     };
 
+    function fitMenu(menu) {
+      if (!menu) return;
+      menu.style.transform = '';
+      const r = menu.getBoundingClientRect();
+      const vw = document.documentElement.clientWidth;
+      let dx = 0;
+      if (r.left < 6) dx = 6 - r.left;
+      else if (r.right > vw - 6) dx = (vw - 6) - r.right;
+      if (dx) menu.style.transform = 'translateX(' + dx + 'px)';
+    }
     function openDropdown(key) {
       Object.entries(dropdownMenus).forEach(([k, el]) => {
         if (el) el.classList.toggle('open', k === key);
+        if (el && k === key && el.classList.contains('open')) fitMenu(el);
       });
     }
     function closeAllDropdowns() {
-      Object.values(dropdownMenus).forEach(el => el && el.classList.remove('open'));
+      Object.values(dropdownMenus).forEach(el => { if (el) { el.classList.remove('open'); el.style.transform = ''; } });
     }
 
     document.getElementById('btn-dd-wechat').addEventListener('click', (e) => {
@@ -5965,9 +6062,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       document.body.classList.toggle('tables-expanded', tablesExpanded);
       if (!tableModeBtn) return;
       tableModeBtn.textContent = tablesExpanded ? '▦ 展开' : '▦ 滚动';
-      tableModeBtn.title = tablesExpanded
+      tableModeBtn.setAttribute('data-tip', tablesExpanded
         ? '当前：完整显示。点击切换为「横向滚动」——宽表格在正文内滚动，不撑宽排版'
-        : '当前：横向滚动。点击切换为「完整显示」——宽表格完整展示，可横向滚动看全表';
+        : '当前：横向滚动。点击切换为「完整显示」——宽表格完整展示，可横向滚动看全表');
     }
     if (tableModeBtn) {
       tableModeBtn.addEventListener('click', () => {
@@ -6154,6 +6251,15 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     }
 
     let _activeProfileId = '';
+    let _llmProfileStatus = {}; // profileId -> 'untested'|'testing'|'ok'|'fail'
+
+    function llmStatusUi(p) {
+      const st = _llmProfileStatus[p.id] || 'untested';
+      if (st === 'ok')       return '<span class="llm-status llm-status-ok">● 连接成功</span>';
+      if (st === 'fail')     return '<span class="llm-status llm-status-fail">● 连接失败</span>';
+      if (st === 'testing')  return '<span class="llm-status llm-status-testing">⋯ 测试中</span>';
+      return '<span class="llm-status llm-status-untested">○ 未测试</span>';
+    }
 
     function renderLlmProfiles(profiles, activeId) {
       _activeProfileId = activeId || '';
@@ -6170,32 +6276,42 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         const keyColor = p.hasKey ? '#3ddc84' : (p.keyOptional ? '#4ea1ff' : '#ffb020');
         const modelShort = (p.model || '').split('/').pop().slice(0, 28);
         const activeCls = isActive ? ' llm-profile-active' : '';
-        const useOrActive = isActive
-          ? '<span class="llm-profile-badge">使用中</span>'
-          : '<button class="llm-profile-use" data-pid="' + p.id + '">切换使用</button>';
-        return '<div class="llm-profile-row' + activeCls + '" data-pid="' + p.id + '">'
+        const host = (p.baseUrl || '').split('://').pop().split('/')[0];
+        return '<div class="llm-profile-row' + activeCls + '" data-pid="' + p.id + '" data-tip="点击切换到「' + (p.name || p.id) + '」">'
           + '<div class="llm-profile-header">'
-          + '<span class="llm-profile-name">' + (p.name || p.id) + '</span>'
-          + useOrActive
+          + '<span class="llm-profile-name">' + (p.name || p.id) + (isActive ? ' <span class="llm-profile-badge">使用中</span>' : '') + '</span>'
+          + llmStatusUi(p)
           + '</div>'
           + '<div class="llm-profile-meta">'
           + (modelShort || '—') + '&nbsp;&nbsp;<span style="color:#555;">|</span>&nbsp;&nbsp;'
-          + ((p.baseUrl||'').split('://').pop().split('/')[0])
+          + (host || '—')
           + '</div>'
           + '<div class="llm-profile-actions">'
+          + '<button class="llm-profile-test" data-pid="' + p.id + '" title="测试此配置的连接">测试连接</button>'
           + '<span style="font-size:11px;color:' + keyColor + ';">' + keyLabel + '</span>'
-          + '<button class="llm-profile-edit" data-pid="' + p.id + '">编辑 / 重命名</button>'
+          + '<button class="llm-profile-edit" data-pid="' + p.id + '">编辑</button>'
           + '<button class="llm-profile-del" data-pid="' + p.id + '" title="删除">🗑</button>'
           + '</div>'
           + '</div>';
       }).join('');
-      list.querySelectorAll('.llm-profile-use').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          vscode.postMessage({ type:'llmSwitchProfile', profileId: btn.dataset.pid });
+      // 整卡点击 = 切换配置（活动卡不切换）
+      list.querySelectorAll('.llm-profile-row').forEach(function(row) {
+        row.addEventListener('click', function() {
+          const pid = row.dataset.pid;
+          if (pid && pid !== _activeProfileId) vscode.postMessage({ type:'llmSwitchProfile', profileId: pid });
+        });
+      });
+      list.querySelectorAll('.llm-profile-test').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          _llmProfileStatus[btn.dataset.pid] = 'testing';
+          renderLlmProfiles(_llmProfilesCache, _activeProfileId);
+          vscode.postMessage({ type:'llmTestProfile', profileId: btn.dataset.pid });
         });
       });
       list.querySelectorAll('.llm-profile-edit').forEach(function(btn) {
-        btn.addEventListener('click', function() {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
           const pid = btn.dataset.pid;
           const full = (_llmProfilesCache || []).find(function(p){ return p.id === pid; });
           if (!full) return;
@@ -6212,7 +6328,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         });
       });
       list.querySelectorAll('.llm-profile-del').forEach(function(btn) {
-        btn.addEventListener('click', function() {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
           if (confirm('确认删除此配置？')) {
             vscode.postMessage({ type:'llmDeleteProfile', profileId: btn.dataset.pid });
           }
@@ -6603,6 +6720,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     window.addEventListener('message', ({ data: msg })=>{
       // LLM 配置类消息与平台无关，广播给所有已注册的块
       if(msg.type==='llmConfig' || msg.type==='llmConfigSaved'){
+        if(msg.type==='llmConfig') _llmProfileStatus = {}; // 面板首次打开，重置连接状态
         for(const pf of Object.values(registered)) applyLlmState(pf, msg.llm);
         // llmConfig = 面板初次打开，允许回填表单；llmConfigSaved = 操作后刷新，只更新列表
         applyLlmStateGlobal(msg.llm, { init: msg.type==='llmConfig' });
@@ -6611,6 +6729,14 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           const gr=$('global-llm-result');
           if(gr){ gr.style.color='#3ddc84'; gr.textContent='✅ 已保存'; }
           const gk=$('global-llm-key'); if(gk) gk.value='';
+        }
+        return;
+      }
+      if(msg.type==='llmTestProfileResult'){
+        if(msg.profileId){
+          _llmProfileStatus[msg.profileId] = msg.ok ? 'ok' : 'fail';
+          renderLlmProfiles(_llmProfilesCache, _activeProfileId);
+          showToast(msg.ok ? '✅ 连接成功：' + (msg.reply || '') : '❌ 连接失败：' + (msg.message || ''), msg.ok ? 'ok' : 'err', 3000);
         }
         return;
       }
