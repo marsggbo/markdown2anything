@@ -918,6 +918,15 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     case 'llmDeleteProfile': {
       try {
         const cfg = vscode.workspace.getConfiguration('markdown2anything');
+        if (msg.profileId === '__legacy__') {
+          // 删除历史遗留扁平配置：清空旧版键 + 旧版 key
+          await cfg.update('llm.baseUrl', '', vscode.ConfigurationTarget.Global);
+          await cfg.update('llm.model', '', vscode.ConfigurationTarget.Global);
+          await extContext.secrets.delete(LLM_SECRET_KEY);
+          await cfg.update('llm.activeProfile', '', vscode.ConfigurationTarget.Global);
+          panel.webview.postMessage({ type: 'llmConfigSaved', llm: await getLlmConfigForView() });
+          break;
+        }
         const profiles = getLlmProfilesData().filter(p => p.id !== msg.profileId);
         await cfg.update('llm.profiles', JSON.stringify(profiles), vscode.ConfigurationTarget.Global);
         await extContext.secrets.delete(LLM_PROFILE_SECRET_PREFIX + msg.profileId);
@@ -936,7 +945,22 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     case 'llmTestConnection': {
       try {
         panel.webview.postMessage({ type: 'llmTestProgress', message: '正在测试连接…' });
-        const res = await llm.testConnection({ config: await getLlmConfig() });
+        // 优先测试表单里当前填的内容（未保存也能测）；未传则回退到激活配置
+        let config;
+        if (typeof msg.baseUrl === 'string' && typeof msg.model === 'string') {
+          const baseUrl = msg.baseUrl.trim();
+          const model   = msg.model.trim();
+          let apiKey = typeof msg.apiKey === 'string' ? msg.apiKey.trim() : '';
+          // key 留空时自动复用同接口地址（同端点）已有配置的 key，与保存逻辑一致
+          if (!apiKey) {
+            const src = getLlmProfilesData().find(p => p.baseUrl === baseUrl);
+            if (src) apiKey = await getLlmProfileApiKey(src.id);
+          }
+          config = { baseUrl, model, apiKey };
+        } else {
+          config = await getLlmConfig();
+        }
+        const res = await llm.testConnection({ config });
         panel.webview.postMessage({ type: 'llmTestResult', ok: true, reply: res.reply });
       } catch (e) {
         panel.webview.postMessage({ type: 'llmTestResult', ok: false, message: e.message });
@@ -1563,14 +1587,23 @@ async function getLlmConfigForView() {
     profiles.push({ id: p.id, name: p.name, baseUrl: p.baseUrl, model: p.model,
                     hasKey: !!apiKey, keyHint: keyFingerprint(apiKey), keyOptional: llm.isLocalEndpoint(p.baseUrl) });
   }
+  // 历史遗留扁平配置（旧版 llm.baseUrl/llm.model/apiKey）：也显示成一张可删除的卡片，
+  // 避免它「隐身」却在无激活 profile 时被默认读取
+  const legacyBase = cfg.get('llm.baseUrl', '');
+  const legacyKey  = await extContext.secrets.get(LLM_SECRET_KEY);
+  const legacyOverlaps = rawProfiles.some(p => p.baseUrl === legacyBase && p.model === cfg.get('llm.model', ''));
+  if (legacyBase && !legacyOverlaps) {
+    profiles.push({ id: '__legacy__', name: '历史遗留配置', baseUrl: legacyBase, model: cfg.get('llm.model', ''),
+                    hasKey: !!legacyKey, keyHint: keyFingerprint(legacyKey), keyOptional: llm.isLocalEndpoint(legacyBase), legacy: true });
+  }
   const active = profiles.find(p => p.id === activeId);
   let baseUrl, model, hasKey;
   if (active) {
     ({ baseUrl, model, hasKey } = active);
   } else {
-    baseUrl = cfg.get('llm.baseUrl', '');
+    baseUrl = legacyBase;
     model   = cfg.get('llm.model', '');
-    hasKey  = !!(await extContext.secrets.get(LLM_SECRET_KEY));
+    hasKey  = !!legacyKey;
   }
   return { baseUrl, model, hasKey, keyOptional: llm.isLocalEndpoint(baseUrl), profiles, activeProfile: activeId };
 }
@@ -2701,8 +2734,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     .llm-profile-test:hover { background:#3a5c3a; }
     .llm-profile-edit { font-size:11px; padding:2px 8px; background:#3a3a3a; color:#ccc; border:none; border-radius:4px; cursor:pointer; }
     .llm-profile-edit:hover { background:#4a4a4a; }
-    .llm-profile-del { font-size:12px; padding:2px 6px; background:none; color:#666; border:none; cursor:pointer; }
-    .llm-profile-del:hover { color:#ff6b6b; }
+    .llm-profile-del { font-size:11px; padding:2px 8px; background:#3a2020; color:#d99; border:1px solid #6b3a3a; border-radius:4px; cursor:pointer; }
+    .llm-profile-del:hover { background:#4a2a2a; color:#ff9a9a; }
     #global-llm-free-list [data-slug] { transition: background .12s; }
     #global-llm-free-list [data-slug]:hover { background: #333; }
     .btn-upload    { background: #f06529; color: #fff; }
@@ -4925,7 +4958,11 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     document.getElementById('global-llm-test').addEventListener('click', () => {
       const result = document.getElementById('global-llm-result');
       if (result) { result.style.color = '#4ea1ff'; result.textContent = '正在测试连接…'; }
-      vscode.postMessage({ type: 'llmTestConnection' });
+      // 测表单里当前填的内容（未保存也能测），这样换了模型名/接口地址后立即能验证
+      const baseUrl = (document.getElementById('global-llm-base')  || {}).value || '';
+      const model   = (document.getElementById('global-llm-model') || {}).value || '';
+      const apiKey  = (document.getElementById('global-llm-key')   || {}).value || '';
+      vscode.postMessage({ type: 'llmTestConnection', baseUrl, model, apiKey });
     });
     document.getElementById('global-llm-clear').addEventListener('click', () => {
       const preset = (document.getElementById('global-llm-preset') || {}).value || '';
@@ -4951,7 +4988,9 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       if (psel) psel.value  = 'openrouter';
       freeList.style.display = 'none';
       const result = document.getElementById('global-llm-result');
-      if (result) { result.style.color = '#3ddc84'; result.textContent = '已填入：' + item.dataset.slug + '（可直接保存并使用）'; }
+      if (result) { result.style.color = '#3ddc84'; result.textContent = '已填入：' + item.dataset.slug + '，正在自动测试…'; }
+      // 自动用刚填入的模型测一次连接，立即反馈是否可用
+      vscode.postMessage({ type: 'llmTestConnection', baseUrl: base ? base.value : '', model: item.dataset.slug, apiKey: '' });
     });
 
     // ─── 封面：拖拽/缩放/历史 + LLM ───
@@ -6383,7 +6422,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           + '<button class="llm-profile-test" data-pid="' + p.id + '" title="测试此配置的连接">测试连接</button>'
           + '<span style="font-size:11px;color:' + keyColor + ';cursor:default;" title="' + keyTip + '">' + keyLabel + '</span>'
           + '<button class="llm-profile-edit" data-pid="' + p.id + '">编辑</button>'
-          + '<button class="llm-profile-del" data-pid="' + p.id + '" title="删除">🗑</button>'
+          + '<button class="llm-profile-del" data-pid="' + p.id + '" title="删除此配置">🗑 删除</button>'
           + '</div>'
           + '</div>';
       }).join('');
@@ -6423,9 +6462,17 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       list.querySelectorAll('.llm-profile-del').forEach(function(btn) {
         btn.addEventListener('click', function(e) {
           e.stopPropagation();
-          if (confirm('确认删除此配置？')) {
-            vscode.postMessage({ type:'llmDeleteProfile', profileId: btn.dataset.pid });
+          // VS Code webview 禁用 window.confirm()，改用「点两下确认」
+          if (btn.dataset.armed !== '1') {
+            btn.dataset.armed = '1';
+            btn.textContent = '确认删除？';
+            btn.style.color = '#ff6b6b';
+            btn.style.background = '#3a1e24';
+            setTimeout(function(){ btn.dataset.armed = '0'; btn.textContent = '🗑 删除'; btn.style.color = ''; btn.style.background = ''; }, 3000);
+            return;
           }
+          btn.dataset.armed = '0';
+          vscode.postMessage({ type:'llmDeleteProfile', profileId: btn.dataset.pid });
         });
       });
     }
