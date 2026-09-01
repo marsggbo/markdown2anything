@@ -962,6 +962,17 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
+    // 拉取 OpenRouter 当前可用的免费模型（带 :free 后缀），用于「免费模型」快捷选择
+    case 'llmFetchFreeModels': {
+      try {
+        const models = await fetchOpenRouterFreeModels();
+        panel.webview.postMessage({ type: 'llmFreeModels', models });
+      } catch (e) {
+        panel.webview.postMessage({ type: 'llmFreeModels', models: [], error: e.message });
+      }
+      break;
+    }
+
     case 'socialGenerateCopy': {
       const platform = msg.platform;
       try {
@@ -1562,6 +1573,42 @@ async function getLlmConfigForView() {
     hasKey  = !!(await extContext.secrets.get(LLM_SECRET_KEY));
   }
   return { baseUrl, model, hasKey, keyOptional: llm.isLocalEndpoint(baseUrl), profiles, activeProfile: activeId };
+}
+
+/**
+ * 拉取 OpenRouter 当前可用的免费模型列表（官方 /api/v1/models，无需鉴权）。
+ * 只返回带 :free 后缀、且免费定价（prompt/completion 均为 0）的模型。
+ * @returns {Promise<Array<{id:string, name:string, context_length:number}>>}
+ */
+function fetchOpenRouterFreeModels() {
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'openrouter.ai',
+      path: '/api/v1/models',
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'markdown2anything-vscode' },
+    }, (res) => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        try {
+          const data = JSON.parse(text).data || [];
+          const free = data
+            .filter(m => /:free$/.test(m.id) || (m.pricing && m.pricing.prompt === '0'))
+            .map(m => ({
+              id: m.id,
+              name: m.name || m.id,
+              context_length: m.context_length || 0,
+            }));
+          resolve(free);
+        } catch (e) { reject(new Error('解析 OpenRouter 模型列表失败')); }
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(20000, () => { req.destroy(); reject(new Error('拉取免费模型列表超时（请检查网络）')); });
+    req.end();
+  });
 }
 
 // ─── 文案持久化：存到文章同目录，切换/重开不用重新生成，也便于随文章一起备份 ───
@@ -2656,6 +2703,8 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     .llm-profile-edit:hover { background:#4a4a4a; }
     .llm-profile-del { font-size:12px; padding:2px 6px; background:none; color:#666; border:none; cursor:pointer; }
     .llm-profile-del:hover { color:#ff6b6b; }
+    #global-llm-free-list [data-slug] { transition: background .12s; }
+    #global-llm-free-list [data-slug]:hover { background: #333; }
     .btn-upload    { background: #f06529; color: #fff; }
     .btn-upload:hover    { background: #d4551f; }
     .btn-zhihu     { background: #0066ff; color: #fff; }
@@ -4049,6 +4098,11 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
         <input type="text" id="global-llm-base" placeholder="https://api.deepseek.com/v1">
         <label style="margin-top:8px;">模型名</label>
         <input type="text" id="global-llm-model" placeholder="deepseek-chat">
+        <div style="margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-secondary" id="global-llm-free-btn" title="一键拉取 OpenRouter 当前可用的免费模型（带 :free 后缀）">🎁 OpenRouter 免费模型</button>
+          <span style="font-size:11px;color:#888;">点一下自动填好接口地址和模型名</span>
+        </div>
+        <div id="global-llm-free-list" style="display:none;margin-top:8px;max-height:180px;overflow-y:auto;background:#222;border:1px solid #444;border-radius:6px;padding:6px;"></div>
         <label style="margin-top:8px;">API Key <span style="color:#3ddc84;font-weight:normal;">（存入系统钥匙串，不落明文）</span></label>
         <input type="password" id="global-llm-key" placeholder="留空则复用同接口地址已有 Key；本地 Ollama 无需填">
         <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap;">
@@ -4877,6 +4931,27 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
       const preset = (document.getElementById('global-llm-preset') || {}).value || '';
       const profileId = preset || 'custom';
       vscode.postMessage({ type: 'llmSaveConfig', profileId, apiKey: '' });
+    });
+    // 🎁 OpenRouter 免费模型：拉取并展示，点选自动填好接口地址 + 模型名
+    const freeBtn  = document.getElementById('global-llm-free-btn');
+    const freeList = document.getElementById('global-llm-free-list');
+    if (freeBtn) freeBtn.addEventListener('click', () => {
+      freeBtn.textContent = '⏳ 正在拉取免费模型…';
+      freeBtn.disabled = true;
+      vscode.postMessage({ type: 'llmFetchFreeModels' });
+    });
+    if (freeList) freeList.addEventListener('click', (e) => {
+      const item = e.target.closest('[data-slug]');
+      if (!item) return;
+      const base  = document.getElementById('global-llm-base');
+      const mdl   = document.getElementById('global-llm-model');
+      const psel  = document.getElementById('global-llm-preset');
+      if (base) base.value = 'https://openrouter.ai/api/v1';
+      if (mdl)  mdl.value  = item.dataset.slug;
+      if (psel) psel.value  = 'openrouter';
+      freeList.style.display = 'none';
+      const result = document.getElementById('global-llm-result');
+      if (result) { result.style.color = '#3ddc84'; result.textContent = '已填入：' + item.dataset.slug + '（可直接保存并使用）'; }
     });
 
     // ─── 封面：拖拽/缩放/历史 + LLM ───
@@ -6756,6 +6831,31 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
           renderLlmProfiles(_llmProfilesCache, _activeProfileId);
           showToast(msg.ok ? '✅ 连接成功：' + (msg.reply || '') : '❌ 连接失败：' + (msg.message || ''), msg.ok ? 'ok' : 'err', 3000);
         }
+        return;
+      }
+      if(msg.type==='llmFreeModels'){
+        const fb = document.getElementById('global-llm-free-btn');
+        const fl = document.getElementById('global-llm-free-list');
+        if(fb){ fb.textContent = '🎁 OpenRouter 免费模型'; fb.disabled = false; }
+        if(!fl) return;
+        if(msg.error){
+          fl.innerHTML = '<div style="padding:8px;color:#ff6b6b;font-size:12px;">拉取失败：' + msg.error + '</div>';
+          fl.style.display = 'block';
+          return;
+        }
+        const models = (msg.models || []).slice().sort((a,b) => (b.context_length||0)-(a.context_length||0));
+        if(!models.length){
+          fl.innerHTML = '<div style="padding:8px;color:#ffb020;font-size:12px;">当前 OpenRouter 暂无免费模型</div>';
+          fl.style.display = 'block';
+          return;
+        }
+        fl.innerHTML = models.map(m =>
+          '<div data-slug="' + m.id + '" style="padding:7px 9px;cursor:pointer;border-radius:4px;font-size:12px;display:flex;justify-content:space-between;gap:8px;align-items:center;">'
+          + '<span style="color:#e0e0e0;">' + m.name + '</span>'
+          + '<span style="color:#777;flex-shrink:0;">' + (m.id.replace(/:free$/,'')) + '</span>'
+          + '</div>'
+        ).join('') + '<div style="padding:6px 4px 2px;color:#888;font-size:10.5px;">点击上方任意一项 → 自动填入接口地址和模型名</div>';
+        fl.style.display = 'block';
         return;
       }
       if(msg.type==='llmTestResult' || msg.type==='llmTestProgress' || msg.type==='llmConfigError'){
