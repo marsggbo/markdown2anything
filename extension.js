@@ -984,6 +984,102 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
+    // 导出全部配置（不含 API Key 明文，只含元数据 + key 指纹），用于备份/迁移
+    case 'llmExportConfig': {
+      try {
+        const profiles = getLlmProfilesData().map(p => ({
+          id: p.id, name: p.name, baseUrl: p.baseUrl, model: p.model,
+          hasKey: p.hasKey === true, keyHint: p.keyHint || '',
+        }));
+        panel.webview.postMessage({ type: 'llmExportResult', json: JSON.stringify(profiles, null, 2), ok: true });
+      } catch (e) {
+        panel.webview.postMessage({ type: 'llmExportResult', ok: false, message: e.message });
+      }
+      break;
+    }
+
+    // 导入配置（JSON 数组，不含 key 明文；导入时 key 留空走同平台继承）
+    case 'llmImportConfig': {
+      try {
+        const cfg = vscode.workspace.getConfiguration('markdown2anything');
+        const list = JSON.parse(msg.json || '[]');
+        if (!Array.isArray(list)) throw new Error('格式错误：应为配置数组');
+        const profiles = getLlmProfilesData();
+        let imported = 0;
+        for (const item of list) {
+          if (!item || typeof item !== 'object') continue;
+          const baseUrl = String(item.baseUrl || '').trim();
+          const model   = String(item.model || '').trim();
+          if (!baseUrl || !model) continue;
+          const id = (String(item.id || '').trim()) || ('p_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7));
+          const existing = profiles.find(p => p.id === id);
+          const profileData = {
+            id,
+            name: (item.name || '').toString().trim() || id,
+            baseUrl, model, savedAt: Date.now(),
+          };
+          if (existing) Object.assign(existing, profileData);
+          else profiles.push(profileData);
+          // key 未提供/为空时尝试同平台继承
+          const sk = LLM_PROFILE_SECRET_PREFIX + id;
+          const hasKeyNow = await extContext.secrets.get(sk);
+          if (!hasKeyNow) {
+            const host = llmHostOf(baseUrl);
+            const src = profiles.find(p => p.id !== id && p.baseUrl === baseUrl && p.id)
+                     || profiles.find(p => p.id !== id && host && host === llmHostOf(p.baseUrl) && p.id);
+            if (src) {
+              const inherit = await getLlmProfileApiKey(src.id);
+              if (inherit) await extContext.secrets.store(sk, inherit);
+            }
+          }
+          imported++;
+        }
+        await cfg.update('llm.profiles', JSON.stringify(profiles), vscode.ConfigurationTarget.Global);
+        panel.webview.postMessage({ type: 'llmImportResult', ok: true, imported, llm: await getLlmConfigForView() });
+      } catch (e) {
+        panel.webview.postMessage({ type: 'llmImportResult', ok: false, message: e.message });
+      }
+      break;
+    }
+
+    // 获取某个配置的完整 API Key（供「显示 Key」开关查看；仅本机 SecretStorage）
+    case 'llmGetProfileKey': {
+      try {
+        const k = await getLlmProfileApiKey(msg.profileId);
+        panel.webview.postMessage({ type: 'llmProfileKey', profileId: msg.profileId, key: k || '' });
+      } catch (e) {
+        panel.webview.postMessage({ type: 'llmProfileKey', profileId: msg.profileId, key: '', error: e.message });
+      }
+      break;
+    }
+
+    // 批量测试所有配置的连接
+    case 'llmTestAll': {
+      try {
+        const profiles = getLlmProfilesData();
+        if (!profiles.length) {
+          panel.webview.postMessage({ type: 'llmTestAllProgress', total: 0, done: 0 });
+          break;
+        }
+        panel.webview.postMessage({ type: 'llmTestAllProgress', total: profiles.length, done: 0 });
+        let done = 0;
+        for (const p of profiles) {
+          try {
+            const apiKey = await getLlmProfileApiKey(p.id);
+            const res = await llm.testConnection({ config: { baseUrl: p.baseUrl, model: p.model, apiKey } });
+            panel.webview.postMessage({ type: 'llmTestProfileResult', profileId: p.id, ok: true, reply: res.reply });
+          } catch (e) {
+            panel.webview.postMessage({ type: 'llmTestProfileResult', profileId: p.id, ok: false, message: e.message });
+          }
+          done++;
+          panel.webview.postMessage({ type: 'llmTestAllProgress', total: profiles.length, done });
+        }
+      } catch (e) {
+        panel.webview.postMessage({ type: 'llmTestAllProgress', total: 0, done: 0, error: e.message });
+      }
+      break;
+    }
+
     // 拉取 OpenRouter 当前可用的免费模型（带 :free 后缀），用于「免费模型」快捷选择
     case 'llmFetchFreeModels': {
       try {

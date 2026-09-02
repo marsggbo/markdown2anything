@@ -161,12 +161,20 @@
     .llm-profile-meta { color:#777; font-size:11px; margin-bottom:6px; line-height:1.5; }
     /* 平台 > token > 模型 三级分组 */
     .llm-plat-group { margin-bottom:10px; border:1px solid #3a3a3a; border-radius:8px; overflow:hidden; background:#1e1e1e; }
-    .llm-plat-head { display:flex; align-items:center; justify-content:space-between; padding:7px 11px; background:#262626; font-size:12.5px; font-weight:700; color:#ddd; border-bottom:1px solid #333; }
+    .llm-plat-head { display:flex; align-items:center; justify-content:space-between; padding:7px 11px; background:#262626; font-size:12.5px; font-weight:700; color:#ddd; border-bottom:1px solid #333; cursor:pointer; user-select:none; }
+    .llm-plat-head:hover { background:#2d2d2d; }
     .llm-plat-count { font-size:10.5px; color:#888; font-weight:600; }
+    .llm-plat-arrow { font-size:9px; color:#777; margin-right:6px; transition:transform .15s; display:inline-block; }
+    .llm-plat-group.llm-collapsed .llm-plat-arrow { transform:rotate(-90deg); }
+    .llm-plat-group.llm-collapsed .llm-plat-body { display:none; }
     .llm-token-group { border-bottom:1px dashed #2f2f2f; }
     .llm-token-group:last-child { border-bottom:none; }
-    .llm-token-head { display:flex; align-items:center; justify-content:space-between; padding:4px 11px; font-size:11px; color:#4fc3f7; background:#1a1a1a; }
+    .llm-token-head { display:flex; align-items:center; justify-content:space-between; padding:4px 11px; font-size:11px; color:#4fc3f7; background:#1a1a1a; cursor:pointer; user-select:none; }
+    .llm-token-head:hover { background:#202020; }
     .llm-token-count { font-size:10px; color:#666; }
+    .llm-token-arrow { font-size:9px; color:#666; margin-right:6px; transition:transform .15s; display:inline-block; }
+    .llm-token-group.llm-collapsed .llm-token-arrow { transform:rotate(-90deg); }
+    .llm-token-group.llm-collapsed .llm-token-body { display:none; }
     .llm-token-group .llm-profile-row { border:1px solid transparent; border-radius:6px; margin:4px 7px; background:#242424; }
     .llm-token-group .llm-profile-row:hover { border-color:#555; background:#2a2a2a; }
     .llm-token-group .llm-profile-row.llm-profile-active { background:#192819; border-color:#3a6a3a; }
@@ -181,6 +189,8 @@
     .llm-profile-use:hover { background:#005fa3; }
     .llm-profile-test { font-size:11px; padding:2px 8px; background:#2d4a2d; color:#7fd97f; border:1px solid #3a6a3a; border-radius:4px; cursor:pointer; }
     .llm-profile-test:hover { background:#3a5c3a; }
+    .llm-profile-key { font-size:11px; padding:2px 8px; background:#3a3a3a; color:#ffd479; border:1px solid #555; border-radius:4px; cursor:pointer; }
+    .llm-profile-key:hover { background:#4a4a3a; }
     .llm-profile-edit { font-size:11px; padding:2px 8px; background:#3a3a3a; color:#ccc; border:none; border-radius:4px; cursor:pointer; }
     .llm-profile-edit:hover { background:#4a4a4a; }
     .llm-profile-del { font-size:11px; padding:2px 8px; background:#3a2020; color:#d99; border:1px solid #6b3a3a; border-radius:4px; cursor:pointer; }
@@ -1754,8 +1764,36 @@
 
         <!-- 已保存的配置列表 -->
         <div id="llm-profiles-section" style="display:none;margin-bottom:16px;">
-          <div style="font-size:10px;font-weight:700;color:#666;letter-spacing:.8px;text-transform:uppercase;margin-bottom:8px;">已保存的配置</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <div style="font-size:10px;font-weight:700;color:#666;letter-spacing:.8px;text-transform:uppercase;">已保存的配置</div>
+            <div style="display:flex;gap:4px;">
+              <button class="btn btn-secondary" id="global-llm-testall" title="逐个测试所有已保存配置的连接" style="font-size:10.5px;padding:2px 8px;">⚡ 全部测试</button>
+              <button class="btn btn-secondary" id="global-llm-export" title="导出全部配置（不含 API Key 明文）" style="font-size:10.5px;padding:2px 8px;">⤓ 导出</button>
+              <button class="btn btn-secondary" id="global-llm-import" title="从 JSON 导入配置（Key 留空自动继承同平台）" style="font-size:10.5px;padding:2px 8px;">⤒ 导入</button>
+            </div>
+          </div>
           <div id="llm-profiles-list"></div>
+          <div id="global-llm-testall-progress" style="font-size:11px;color:#4fc3f7;margin-top:6px;"></div>
+        </div>
+        <!-- 导入配置的 JSON 输入框（隐藏，点导入时显示） -->
+        <div id="global-llm-import-box" style="display:none;margin-bottom:12px;background:#1e1e1e;border:1px solid #444;border-radius:6px;padding:10px;">
+          <div style="font-size:11px;color:#aaa;margin-bottom:6px;">粘贴要导入的配置 JSON（不含密钥，留空 Key 会自动继承同平台已有的 Key）：</div>
+          <textarea id="global-llm-import-json" rows="5" style="width:100%;box-sizing:border-box;background:#222;color:#d0d0d0;border:1px solid #444;border-radius:4px;font-family:monospace;font-size:11px;resize:vertical;"></textarea>
+          <div style="display:flex;gap:6px;margin-top:8px;">
+            <button class="btn btn-primary" id="global-llm-import-confirm" style="flex:1;">导入</button>
+            <button class="btn btn-secondary" id="global-llm-import-cancel">取消</button>
+          </div>
+          <div id="global-llm-import-result" style="font-size:11px;color:#3ddc84;margin-top:6px;"></div>
+        </div>
+        <!-- 显示 Key 的弹出层 -->
+        <div id="global-llm-key-pop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:60;display:none;align-items:center;justify-content:center;" onclick="if(event.target===this)hideLlmKeyPop()">
+          <div style="background:#262626;border:1px solid #4a4a4a;border-radius:10px;padding:16px 18px;max-width:420px;width:90%;box-sizing:border-box;">
+            <div style="font-weight:700;color:#ddd;margin-bottom:10px;">🔑 <span id="llm-key-pop-name"></span></div>
+            <div style="word-break:break-all;font-family:monospace;font-size:12px;color:#3ddc84;background:#111;border:1px solid #333;border-radius:6px;padding:10px;" id="llm-key-pop-value">加载中…</div>
+            <div style="display:flex;justify-content:flex-end;margin-top:12px;">
+              <button class="btn btn-secondary" onclick="hideLlmKeyPop()" style="font-size:11px;padding:3px 14px;">关闭</button>
+            </div>
+          </div>
         </div>
 
         <!-- 添加 / 修改表单 -->
@@ -2650,6 +2688,45 @@
       if (freeCache) freeCache.textContent = '';
       if (freeBtn) { freeBtn.textContent = '⏳ 正在刷新…'; freeBtn.disabled = true; }
       vscode.postMessage({ type: 'llmFetchFreeModels', force: true });
+    });
+    // 「显示 Key」弹窗（挂全局，供内联 onclick 调用）
+    window.hideLlmKeyPop = function() {
+      const pop = document.getElementById('global-llm-key-pop');
+      if (pop) pop.style.display = 'none';
+    };
+    // ⚡ 全部测试：批量测试所有已保存配置
+    const testAllBtn = document.getElementById('global-llm-testall');
+    if (testAllBtn) testAllBtn.addEventListener('click', () => {
+      testAllBtn.textContent = '⏳ 测试中…';
+      testAllBtn.disabled = true;
+      vscode.postMessage({ type: 'llmTestAll' });
+    });
+    // ⤓ 导出：请求配置 JSON 并下载
+    const exportBtn = document.getElementById('global-llm-export');
+    if (exportBtn) exportBtn.addEventListener('click', () => {
+      exportBtn.textContent = '⏳ 生成中…';
+      exportBtn.disabled = true;
+      vscode.postMessage({ type: 'llmExportConfig' });
+    });
+    // ⤒ 导入：显示 JSON 输入框
+    const importBtn = document.getElementById('global-llm-import');
+    const importBox = document.getElementById('global-llm-import-box');
+    if (importBtn && importBox) importBtn.addEventListener('click', () => {
+      importBox.style.display = importBox.style.display === 'none' ? '' : 'none';
+      const res = document.getElementById('global-llm-import-result');
+      if (res) res.textContent = '';
+    });
+    const importConfirm = document.getElementById('global-llm-import-confirm');
+    if (importConfirm) importConfirm.addEventListener('click', () => {
+      const ta = document.getElementById('global-llm-import-json');
+      if (!ta || !ta.value.trim()) return;
+      const res = document.getElementById('global-llm-import-result');
+      if (res) res.textContent = '导入中…';
+      vscode.postMessage({ type: 'llmImportConfig', json: ta.value });
+    });
+    const importCancel = document.getElementById('global-llm-import-cancel');
+    if (importCancel && importBox) importCancel.addEventListener('click', () => {
+      importBox.style.display = 'none';
     });
     if (freeList) freeList.addEventListener('click', (e) => {
       const item = e.target.closest('[data-slug]');
@@ -4108,12 +4185,17 @@
         const tokens = byHost[host];
         let modelCount = 0;
         Object.keys(tokens).forEach(function(tk){ modelCount += tokens[tk].list.length; });
-        html += '<div class="llm-plat-group">'
-          + '<div class="llm-plat-head">🌐 ' + host + ' <span class="llm-plat-count">' + modelCount + ' 个模型</span></div>';
+        const hostCollapsed = window._llmCollapsed && window._llmCollapsed['h:' + host] ? ' llm-collapsed' : '';
+        html += '<div class="llm-plat-group' + hostCollapsed + '" data-host="' + host + '">'
+          + '<div class="llm-plat-head"><span><span class="llm-plat-arrow">▼</span>🌐 ' + host + '</span> <span class="llm-plat-count">' + modelCount + ' 个模型</span></div>'
+          + '<div class="llm-plat-body">';
         Object.keys(tokens).forEach(function(tk){
           const g = tokens[tk];
-          html += '<div class="llm-token-group">'
-            + '<div class="llm-token-head">' + g.label + ' <span class="llm-token-count">' + g.list.length + ' 个</span></div>';
+          const tokenKey = 'h:' + host + '|t:' + tk;
+          const tokenCollapsed = window._llmCollapsed && window._llmCollapsed[tokenKey] ? ' llm-collapsed' : '';
+          html += '<div class="llm-token-group' + tokenCollapsed + '" data-token="' + tokenKey + '">'
+            + '<div class="llm-token-head"><span><span class="llm-token-arrow">▼</span>' + g.label + '</span> <span class="llm-token-count">' + g.list.length + ' 个</span></div>'
+            + '<div class="llm-token-body">';
           g.list.forEach(function(p){
             const isActive = p.id === activeId;
             const modelShort = (p.model || '').split('/').pop().slice(0, 30);
@@ -4126,16 +4208,51 @@
               + '<div class="llm-profile-meta">' + (modelShort || '—') + '</div>'
               + '<div class="llm-profile-actions">'
               + '<button class="llm-profile-test" data-pid="' + p.id + '" title="测试此配置的连接">测试连接</button>'
+              + (p.hasKey ? '<button class="llm-profile-key" data-pid="' + p.id + '" data-name="' + (p.name || p.id) + '" title="查看此配置的完整 API Key">🔑</button>' : '')
               + '<button class="llm-profile-edit" data-pid="' + p.id + '">编辑</button>'
               + '<button class="llm-profile-del" data-pid="' + p.id + '" title="删除此配置">🗑 删除</button>'
               + '</div>'
               + '</div>';
           });
-          html += '</div>';
+          html += '</div></div>';
         });
-        html += '</div>';
+        html += '</div></div>';
       });
       list.innerHTML = html;
+      // 平台头点击折叠
+      list.querySelectorAll('.llm-plat-head').forEach(function(head) {
+        head.addEventListener('click', function() {
+          const group = head.closest('.llm-plat-group');
+          if (!group) return;
+          const host = group.dataset.host || '';
+          if (!window._llmCollapsed) window._llmCollapsed = {};
+          const key = 'h:' + host;
+          window._llmCollapsed[key] = !window._llmCollapsed[key];
+          group.classList.toggle('llm-collapsed', !!window._llmCollapsed[key]);
+        });
+      });
+      // token 头点击折叠
+      list.querySelectorAll('.llm-token-head').forEach(function(head) {
+        head.addEventListener('click', function() {
+          const group = head.closest('.llm-token-group');
+          if (!group) return;
+          const tk = group.dataset.token || '';
+          if (!window._llmCollapsed) window._llmCollapsed = {};
+          window._llmCollapsed[tk] = !window._llmCollapsed[tk];
+          group.classList.toggle('llm-collapsed', !!window._llmCollapsed[tk]);
+        });
+      });
+      // 查看 Key 按钮
+      list.querySelectorAll('.llm-profile-key').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          vscode.postMessage({ type:'llmGetProfileKey', profileId: btn.dataset.pid });
+          const nameEl = $('llm-key-pop-name'); if (nameEl) nameEl.textContent = btn.dataset.name || '';
+          const valEl = $('llm-key-pop-value'); if (valEl) valEl.textContent = '加载中…';
+          const pop = $('global-llm-key-pop');
+          if (pop) { pop.style.display = 'flex'; }
+        });
+      });
       // 整卡点击 = 切换配置（活动卡不切换）
       list.querySelectorAll('.llm-profile-row').forEach(function(row) {
         row.addEventListener('click', function() {
@@ -4608,6 +4725,66 @@
           _llmProfileStatus[msg.profileId] = msg.ok ? 'ok' : 'fail';
           renderLlmProfiles(_llmProfilesCache, _activeProfileId);
           showToast(msg.ok ? '✅ 连接成功：' + (msg.reply || '') : '❌ 连接失败：' + (msg.message || ''), msg.ok ? 'ok' : 'err', 3000);
+        }
+        return;
+      }
+      // 🔑 显示完整 Key（从本机 SecretStorage 读取）
+      if(msg.type==='llmProfileKey'){
+        const valEl = document.getElementById('llm-key-pop-value');
+        if(valEl){
+          if(msg.error){ valEl.textContent = '读取失败：' + msg.error; valEl.style.color = '#ff6b6b'; }
+          else if(!msg.key){ valEl.textContent = '（此配置暂无已保存的 Key）'; valEl.style.color = '#aaa'; }
+          else { valEl.textContent = msg.key; valEl.style.color = '#3ddc84'; }
+        }
+        return;
+      }
+      // ⤓ 导出结果：触发 JSON 文件下载
+      if(msg.type==='llmExportResult'){
+        const eb = document.getElementById('global-llm-export');
+        if(eb){ eb.textContent = '⤓ 导出'; eb.disabled = false; }
+        if(!msg.ok){ showToast('导出失败：' + (msg.message || ''), 'err', 4000); return; }
+        const blob = new Blob([msg.json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'markdown2anything-llm-configs-' + new Date().toISOString().slice(0,10) + '.json';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); }, 500);
+        showToast('✅ 已导出 ' + (JSON.parse(msg.json).length || 0) + ' 个配置（不含密钥）', 'ok', 3500);
+        return;
+      }
+      // ⤒ 导入结果
+      if(msg.type==='llmImportResult'){
+        const res = document.getElementById('global-llm-import-result');
+        const ib  = document.getElementById('global-llm-import-box');
+        if(res){
+          if(msg.ok){ res.style.color = '#3ddc84'; res.textContent = '✅ 导入成功：' + msg.imported + ' 个配置（Key 已按同平台自动继承/留空）'; }
+          else { res.style.color = '#ff6b6b'; res.textContent = '导入失败：' + (msg.message || ''); }
+        }
+        if(msg.ok){
+          if(msg.llm){
+            _llmProfilesCache = msg.llm.profiles || _llmProfilesCache;
+            applyLlmStateGlobal(msg.llm);
+          }
+          if(ib) setTimeout(function(){ ib.style.display = 'none'; }, 2200);
+          if(res) setTimeout(function(){ res.textContent = ''; }, 2200);
+        }
+        return;
+      }
+      // ⚡ 全部测试进度
+      if(msg.type==='llmTestAllProgress'){
+        const pb = document.getElementById('global-llm-testall');
+        const pg = document.getElementById('global-llm-testall-progress');
+        if(msg.total === 0){
+          if(pb){ pb.textContent = '⚡ 全部测试'; pb.disabled = false; }
+          if(pg){ pg.textContent = (msg.error ? '批量测试失败：' + msg.error : '没有可测试的配置'); }
+          return;
+        }
+        if(pg) pg.textContent = '测试进度：' + msg.done + ' / ' + msg.total;
+        if(msg.done >= msg.total){
+          if(pb){ pb.textContent = '⚡ 全部测试'; pb.disabled = false; }
+          setTimeout(function(){ if(pg) pg.textContent = ''; }, 3500);
         }
         return;
       }
