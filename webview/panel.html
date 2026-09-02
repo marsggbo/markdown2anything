@@ -261,20 +261,21 @@
       flex-direction: column;
       flex-shrink: 0;
     }
-    .side-panel.open { width: 340px; }
+    .side-panel.open { width: 340px; position: relative; }
     .xhs-panel.open  { width: 480px; min-width: 340px; max-width: calc(100% - 220px); position: relative; }
-    .xhs-panel .resize-handle {
+    /* 所有侧面板通用拖拽调宽手柄（面板左侧竖条，按住左右拖） */
+    .side-panel .resize-handle {
       position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
       cursor: col-resize; background: rgba(255,255,255,0.06); z-index: 10;
       display: none;
     }
-    .xhs-panel.open .resize-handle { display: block; }
-    .xhs-panel .resize-handle:hover { background: #0078d4; }
-    .xhs-panel .resize-handle::after {
+    .side-panel.open .resize-handle { display: block; }
+    .side-panel .resize-handle:hover { background: #0078d4; }
+    .side-panel .resize-handle::after {
       content: ''; position: absolute; left: 2px; top: 50%; transform: translateY(-50%);
       width: 2px; height: 40px; background: #555; border-radius: 2px;
     }
-    .xhs-panel .resize-handle:hover::after { background: #0078d4; }
+    .side-panel .resize-handle:hover::after { background: #0078d4; }
     /* ── XHS 参数网格 ── */
     .xhs-param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .xhs-param-grid > div > label { font-size: 11px !important; color: #999 !important; margin: 0 0 3px !important; }
@@ -1062,6 +1063,7 @@
 
     <!-- 样式编辑面板 -->
     <div class="side-panel" id="style-panel">
+      <div class="resize-handle" id="style-resize-handle" title="按住左右拖动调整面板宽度"></div>
       <div class="side-panel-header">🎨 自定义样式<button class="panel-close-btn" data-close-panel="style-panel" data-close-state="stylePanelOpen">×</button></div>
       <div class="side-panel-body">
 
@@ -1759,6 +1761,7 @@
 
     <!-- LLM 全局配置面板 -->
     <div class="side-panel" id="llm-config-panel">
+      <div class="resize-handle" id="llm-resize-handle" title="按住左右拖动调整面板宽度"></div>
       <div class="side-panel-header">⚙️ LLM 配置<button class="panel-close-btn" data-close-panel="llm-config-panel" data-close-state="llmConfigPanelOpen">×</button></div>
       <div class="side-panel-body">
 
@@ -2245,32 +2248,52 @@
       }
     }
 
-    // XHS 面板拖拽调宽（限制最大宽度，确保预览区始终可见）
+    // 所有侧面板拖拽调宽（面板左侧竖条，按住左右拖动；双击重置默认宽度）
+    // 限制最大宽度，确保预览区始终可见
     (function initResize() {
-      const handle = document.getElementById('xhs-resize-handle');
-      const panel  = document.getElementById('xhs-panel');
-      if (!handle || !panel) return;
-      const XHS_DEFAULT_W = 480;
-      const XHS_MIN_W = 340;
-      let startX, startW;
-      function getMaxW() {
-        // 预览区至少保留 220px
-        return Math.max(XHS_MIN_W, (panel.parentElement ? panel.parentElement.offsetWidth : window.innerWidth) - 220);
-      }
-      handle.addEventListener('mousedown', function(e) {
-        startX = e.clientX; startW = panel.offsetWidth;
-        e.preventDefault();
-        function onMove(ev) {
-          const w = Math.min(getMaxW(), Math.max(XHS_MIN_W, startW - (ev.clientX - startX)));
-          panel.style.width = w + 'px';
+      const PANELS = [
+        { panelId: 'xhs-panel',         handleId: 'xhs-resize-handle',         defaultW: 480, minW: 340 },
+        { panelId: 'cover-panel',       handleId: 'cover-resize-handle',       defaultW: 480, minW: 340 },
+        { panelId: 'twitter-panel',     handleId: 'twitter-resize-handle',     defaultW: 480, minW: 340 },
+        { panelId: 'ppt-panel',         handleId: 'ppt-resize-handle',         defaultW: 480, minW: 340 },
+        { panelId: 'style-panel',       handleId: 'style-resize-handle',       defaultW: 340, minW: 280 },
+        { panelId: 'llm-config-panel',  handleId: 'llm-resize-handle',         defaultW: 340, minW: 280 },
+      ];
+      PANELS.forEach(function(cfg) {
+        const handle = document.getElementById(cfg.handleId);
+        const panel  = document.getElementById(cfg.panelId);
+        if (!handle || !panel) return;
+        let startX, startW;
+        function getMaxW() {
+          // 预览区至少保留 220px
+          return Math.max(cfg.minW, (panel.parentElement ? panel.parentElement.offsetWidth : window.innerWidth) - 220);
         }
-        function onUp() { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); }
-        document.addEventListener('mousemove', onMove);
-        document.addEventListener('mouseup', onUp);
-      });
-      // 双击 handle 重置为默认宽度
-      handle.addEventListener('dblclick', function() {
-        panel.style.width = XHS_DEFAULT_W + 'px';
+        handle.addEventListener('mousedown', function(e) {
+          startX = e.clientX; startW = panel.offsetWidth;
+          e.preventDefault();
+          // 拖拽期间禁用 width 过渡动画，避免拖起来卡顿
+          const prevTransition = panel.style.transition;
+          panel.style.transition = 'none';
+          function onMove(ev) {
+            const w = Math.min(getMaxW(), Math.max(cfg.minW, startW - (ev.clientX - startX)));
+            panel.style.width = w + 'px';
+          }
+          function onUp() {
+            panel.style.transition = prevTransition;
+            // 记住拖拽后的宽度（关闭再打开时恢复）
+            if (!window._panelResizeW) window._panelResizeW = {};
+            window._panelResizeW[cfg.panelId] = panel.offsetWidth;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+          }
+          document.addEventListener('mousemove', onMove);
+          document.addEventListener('mouseup', onUp);
+        });
+        // 双击 handle 重置为默认宽度
+        handle.addEventListener('dblclick', function() {
+          panel.style.width = cfg.defaultW + 'px';
+          if (window._panelResizeW) delete window._panelResizeW[cfg.panelId];
+        });
       });
     })();
 
@@ -2289,7 +2312,14 @@
       const newVal = !panelState[stateKey];
       panelState[stateKey] = newVal;
       panel.classList.toggle('open', newVal);
-      if (!newVal) panel.style.width = ''; // 关闭时清除内联 width
+      if (newVal) {
+        // 打开时恢复上次拖拽记忆的宽度（若有）
+        if (window._panelResizeW && window._panelResizeW[panelId]) {
+          panel.style.width = window._panelResizeW[panelId] + 'px';
+        }
+      } else {
+        panel.style.width = ''; // 关闭时清除内联 width
+      }
       // 关闭其他面板
       (closeOtherIds || []).forEach(id => {
         const other = document.getElementById(id.panelId);
