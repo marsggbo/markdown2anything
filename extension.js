@@ -18,6 +18,11 @@ const matter = require('gray-matter');
 const pandocManager = require('./lib/pandoc-manager');
 const slidevManager = require('./lib/slidev-manager');
 
+// 在扩展宿主里 process.execPath 是 VS Code 的 Electron 二进制，用它跑 Node 脚本
+// 必须带 ELECTRON_RUN_AS_NODE=1，否则二进制会把脚本参数当命令行选项、不执行脚本。
+// 修复：封面脚本合成、小红书截图、知乎登录浏览器等 spawn 全走这个 env。
+const NODE_EXEC_ENV = Object.assign({}, process.env, { ELECTRON_RUN_AS_NODE: '1' });
+
 // ─────────────────────────────────────────────
 //  全局状态
 // ─────────────────────────────────────────────
@@ -284,7 +289,7 @@ function installChromium(panel) {
     const cliPath = path.join(
       extContext.extensionUri.fsPath, 'node_modules', 'playwright-core', 'lib', 'cli', 'program.js'
     );
-    const proc = spawn(process.execPath, [cliPath, 'install', 'chromium']);
+    const proc = spawn(process.execPath, [cliPath, 'install', 'chromium'], { env: NODE_EXEC_ENV });
     proc.stdout.on('data', d => {
       const line = d.toString().trim();
       if (line) panel.webview.postMessage({ type: 'xhsPythonProgress', message: '📥 ' + line });
@@ -425,7 +430,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
           scriptPath, tmpHtml, outDir,
           '--width', String(width), '--height', String(height),
           '--padding', String(padding), '--bg', bg,
-        ]);
+        ], { env: NODE_EXEC_ENV });
 
         let stdout = '';
         proc.stdout.on('data', d => {
@@ -655,7 +660,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         if (msg.titleState) args.push('--titleState', JSON.stringify(msg.titleState));
         if (bgDataUrl && bgDataUrl.startsWith('http')) args.push('--bg', bgDataUrl);
 
-        const proc = spawn(process.execPath, args);
+        const proc = spawn(process.execPath, args, { env: NODE_EXEC_ENV });
         let stdout='';
         proc.stdout.on('data', d=>{ stdout+=d.toString(); const l=d.toString().trim(); if(l.startsWith('INFO:')) panel.webview.postMessage({type:'coverProgress', message:l.slice(5)}); });
         proc.stderr.on('data', d=>{ stdout+=d.toString(); });
@@ -664,7 +669,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
           if (code===2) {
             panel.webview.postMessage({type:'coverProgress', message:'📥 首次使用，正在下载 Chromium...'});
             await installChromium(panel);
-            const proc2=spawn(process.execPath, args);
+            const proc2=spawn(process.execPath, args, { env: NODE_EXEC_ENV });
             let out2='';
             proc2.stdout.on('data', d=>{ out2+=d.toString(); });
             proc2.on('close', c2=>{
@@ -1288,7 +1293,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       panel.webview.postMessage({ type: 'zhihuQrProgress', message: '正在启动浏览器，请在弹出的窗口中登录...' });
       log('启动知乎登录浏览器');
 
-      const proc = spawn(process.execPath, [scriptPath]);
+      const proc = spawn(process.execPath, [scriptPath], { env: NODE_EXEC_ENV });
       let stdout = '';
 
       proc.stdout.on('data', async (d) => {
@@ -2044,7 +2049,7 @@ function exportXhsImages(mdPath, panel, platform, retried = false, exportMode) {
     const proc = spawn(process.execPath, [
       scriptPath, tmpHtml, outDir,
       '--width', '1080', '--height', '1440', '--padding', '40', '--bg', '#ffffff',
-    ]);
+    ], { env: NODE_EXEC_ENV });
 
     let stdout = '';
     proc.stdout.on('data', d => {

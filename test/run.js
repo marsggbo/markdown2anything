@@ -55,8 +55,7 @@ if (mode === 'all' || mode === 'syntax') {
   console.log('── 逻辑测试（无需浏览器）──');
   const logicDir = path.join(__dirname);
   for (const f of fs.readdirSync(logicDir)) {
-    if (!/^(host_|render_chain)\.js$/.test(f)) continue;
-    run(f, () => sh(`node "${path.join(logicDir, f)}"`));
+    if (!/^(host_|render_chain)\.js$/.test(f) && !f.startsWith('host_')) continue;    run(f, () => sh(`node "${path.join(logicDir, f)}"`));
   }
 
   console.log('── webview/panel.html 检查 ──');
