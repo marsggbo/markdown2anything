@@ -52,6 +52,13 @@ if (mode === 'all' || mode === 'syntax') {
     });
   }
 
+  console.log('── 逻辑测试（无需浏览器）──');
+  const logicDir = path.join(__dirname);
+  for (const f of fs.readdirSync(logicDir)) {
+    if (!f.startsWith('host_') || !f.endsWith('.js')) continue;
+    run(f, () => sh(`node "${path.join(logicDir, f)}"`));
+  }
+
   console.log('── webview/panel.html 检查 ──');
   run('内联脚本语法 (3 块)', () => {
     const html = fs.readFileSync(path.join(root, 'webview', 'panel.html'), 'utf8');
