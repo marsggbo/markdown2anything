@@ -3371,6 +3371,10 @@
           showToast('复制失败：' + (msg.message || '未知错误'), 'error');
           break;
         }
+        case 'zhihuHtmlProgress': {
+          showToast(msg.message || '正在处理...', 'info', 2500);
+          break;
+        }
         case 'zhihuHtml': {
           const btn = document.getElementById('btn-zhihu');
           btn.disabled = false;

@@ -63,4 +63,19 @@ assert.strictEqual((copy2.match(/zhihu\.com\/equation/g) || []).length, 0, '复�
 assert.strictEqual((copy2.match(/<svg/g) || []).length, 3, '复杂公式应全部转 SVG');
 console.log('✓ 复杂公式：3 个全部转 SVG，无降级');
 
+// \bm 粗体公式：MathJax 发行版无 bm 宏包，曾被当作未知命令渲染成红色 "bm"
+// 修复后 \bm/\boldsymbol/\pmb 都应是正常粗体 SVG，不含 fill="red"
+const f3 = path.join(os.tmpdir(), `m2a-fmt3-${Date.now()}.md`);
+fs.writeFileSync(f3, [
+  '$$\\bm{x} + \\boldsymbol{y} + \\pmb{z}$$',
+  '',
+  '$$\\hat{\\bm{\\mu}} + \\bm{\\alpha}$$',
+].join('\n'));
+const { bodyHtml: bh3 } = renderMarkdown(f3);
+fs.unlinkSync(f3);
+const copy3 = buildWechatCopyHtml(bh3, null, null);
+assert.ok(!copy3.includes('fill="red"'), '\\bm 不应渲染成红色未知命令文字');
+assert.strictEqual((copy3.match(/<svg/g) || []).length, 2, '\\bm 公式应正常转 SVG');
+console.log('✓ \\bm/\\boldsymbol/\\pmb：2 个公式正常粗体渲染，无红色降级');
+
 console.log('\n✅ 微信公式 SVG 回归检查通过');

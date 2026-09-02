@@ -539,11 +539,27 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const templateName = cfg.get('template', 'wechat');
         const templatePath = getTemplatePath(workspacePath, templateName);
         const { bodyHtml } = renderMarkdown(mdPath);
-        // 远程图片下载转 base64 内联：知乎编辑器拒绝外链图片，粘贴后图片才能显示
+        // 远程图片下载转 base64 内联（保证本地/远程图片统一为 data URI）
         const inlined = await inlineRemoteImages(bodyHtml);
         const theme = getTheme(currentThemeId);
-        const html = buildZhihuCopyHtml(inlined, templatePath, theme);
-        panel.webview.postMessage({ type: 'zhihuHtml', html });
+        let html = buildZhihuCopyHtml(inlined, templatePath, theme);
+
+        // 知乎编辑器只认自己图床（zhimg.com）的图片，base64 粘贴会被拒绝。
+        // 若用户已登录知乎，自动上传图片到知乎图床替换为 CDN URL，粘贴即可显示。
+        const cookieStr = extContext.globalState.get(zhihu.STORAGE_KEY, '');
+        if (zhihu.isLoggedIn(cookieStr)) {
+          const imgCount = (html.match(/data:image\//g) || []).length;
+          if (imgCount > 0) {
+            panel.webview.postMessage({ type: 'zhihuHtmlProgress', message: `正在上传 ${imgCount} 张图片到知乎图床...` });
+            const up = await zhihu.uploadImagesInHtml(html, cookieStr);
+            html = up.html;
+            log(`知乎复制：图片上传 ${up.total - up.failed}/${up.total} 成功`);
+            if (up.failed > 0) {
+              log(`知乎复制：${up.failed} 张图片上传失败，已保留原图`);
+            }
+          }
+        }
+        panel.webview.postMessage({ type: 'zhihuHtml', html, imgUploaded: imgCount });
       } catch (err) {
         log(`buildZhihuCopyHtml 失败: ${err.message}`);
         panel.webview.postMessage({ type: 'zhihuHtmlError', message: err.message });
