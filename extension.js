@@ -6,7 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const https = require('https');
 
-const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtmlByMode } = require('./lib/converter');
+const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtmlByMode, inlineRemoteImages } = require('./lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('./lib/themes');
 const zhihu = require('./lib/zhihu');
 const llm = require('./lib/llm');
@@ -519,8 +519,10 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const templateName = cfg.get('template', 'wechat');
         const templatePath = getTemplatePath(workspacePath, templateName);
         const { bodyHtml } = renderMarkdown(mdPath);
+        // 远程图片下载转 base64 内联：微信编辑器拒绝外链图片，粘贴后图片才能显示
+        const inlined = await inlineRemoteImages(bodyHtml);
         const theme = getTheme(currentThemeId);
-        const html = buildWechatCopyHtml(bodyHtml, templatePath, theme);
+        const html = buildWechatCopyHtml(inlined, templatePath, theme);
         panel.webview.postMessage({ type: 'wechatHtml', html });
       } catch (err) {
         log(`buildWechatCopyHtml 失败: ${err.message}`);
@@ -537,8 +539,10 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const templateName = cfg.get('template', 'wechat');
         const templatePath = getTemplatePath(workspacePath, templateName);
         const { bodyHtml } = renderMarkdown(mdPath);
+        // 远程图片下载转 base64 内联：知乎编辑器拒绝外链图片，粘贴后图片才能显示
+        const inlined = await inlineRemoteImages(bodyHtml);
         const theme = getTheme(currentThemeId);
-        const html = buildZhihuCopyHtml(bodyHtml, templatePath, theme);
+        const html = buildZhihuCopyHtml(inlined, templatePath, theme);
         panel.webview.postMessage({ type: 'zhihuHtml', html });
       } catch (err) {
         log(`buildZhihuCopyHtml 失败: ${err.message}`);
