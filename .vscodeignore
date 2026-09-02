@@ -51,3 +51,27 @@ electron-builder.yml
 node_modules/electron/
 node_modules/electron-builder/
 node_modules/@electron/
+
+# ── 运行时不需要：sourcemap / 测试 / 文档 ───────────────────────────────────────
+**/*.map
+node_modules/mathjax-full/components/
+node_modules/speech-rule-engine/
+docs/
+node_modules/playwright-core/lib/vite/
+icon.png.bak
+node_modules/highlight.js/styles/*.css
+!node_modules/highlight.js/styles/github.css
+!node_modules/highlight.js/styles/github.min.css
+
+# ── 运行时不需要的冗余文件（瘦身，经逐一验证） ──────────────────────────────────
+node_modules/katex/dist/katex.mjs
+node_modules/katex/dist/contrib/
+node_modules/katex/dist/katex.min.js
+node_modules/html2canvas/dist/lib/
+node_modules/html2canvas/dist/types/
+node_modules/html2canvas/dist/html2canvas.js
+node_modules/html2canvas/dist/html2canvas.esm.js
+node_modules/ali-oss/dist/
+node_modules/playwright-core/types/
+node_modules/playwright-core/lib/mcpBundle.js
+node_modules/playwright-core/lib/mcpBundleImpl.js
