@@ -239,7 +239,8 @@
     "build:mac:universal": "electron-builder --mac --universal",
     "test": "node test/run.js",
     "test:syntax": "node test/run.js syntax",
-    "test:ui": "node test/run.js ui"
+    "test:ui": "node test/run.js ui",
+    "release": "node scripts/release.js"
   },
   "devDependencies": {
     "@vscode/vsce": "^3.9.2",

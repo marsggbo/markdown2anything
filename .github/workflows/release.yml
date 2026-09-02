@@ -1,0 +1,52 @@
+name: Release
+
+# 推送 v* tag 时自动构建 vsix 并发布：
+#   - 创建 GitHub Release（含 vsix 资产）
+#   - 若配置了 VSCE_PAT secret，同时发布到 VS Code Marketplace
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发布
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 提取版本号
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: 打包 vsix
+        run: npx --yes @vscode/vsce package --out markdown2anything-${{ steps.version.outputs.tag }}.vsix
+
+      - name: 创建 GitHub Release 并上传资产
+        uses: softprops/action-gh-release@v2
+        with:
+          files: markdown2anything-${{ steps.version.outputs.tag }}.vsix
+          name: v${{ steps.version.outputs.tag }}
+          body: |
+            Markdown2Anything v${{ steps.version.outputs.tag }}
+
+            变更内容见 [CHANGELOG.md](https://github.com/marsggbo/markdown2anything/blob/main/CHANGELOG.md)
+          draft: false
+          prerelease: false
+
+      - name: 发布到 VS Code Marketplace
+        if: env.VSCE_PAT != ''
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --yes @vscode/vsce publish --packagePath markdown2anything-${{ steps.version.outputs.tag }}.vsix
