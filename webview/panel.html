@@ -3200,20 +3200,7 @@
       }
     });
 
-    // 知乎复制
-    document.getElementById('btn-zhihu').addEventListener('click', () => {
-      const btn = document.getElementById('btn-zhihu');
-      btn.disabled = true; btn.textContent = '⏳ 处理中...';
-      vscode.postMessage({ type: 'getZhihuHtml' });
-    });
-
-    // 小红书长文复制
-    document.getElementById('btn-xhs-copy').addEventListener('click', () => {
-      const btn = document.getElementById('btn-xhs-copy');
-      btn.disabled = true; btn.textContent = '⏳ 处理中...';
-      vscode.postMessage({ type: 'getXhsCopyHtml' });
-    });
-
+    // 小红书长文复制（唯一绑定，见上方 2622 行——勿重复绑定，textContent 会销毁 .item-label）
     document.getElementById('btn-export').addEventListener('click', () => {
       const outputPath = (document.getElementById('html-output-path').value || '').trim();
       closeAllDropdowns();
