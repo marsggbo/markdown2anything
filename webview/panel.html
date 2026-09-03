@@ -3380,12 +3380,20 @@
           btn.disabled = false;
           const _zl = btn.querySelector('.item-label'); if (_zl) _zl.textContent = '复制到剪贴板';
           const html = msg.html || '';
+          // 图片处理结果提示：已自动上传 → 正常；有图但未登录/未上传 → 提醒登录
+          const _imgNote = (() => {
+            const n = msg.imgCount || 0;
+            if (n === 0) return '';
+            if ((msg.imgUploaded || 0) > 0) return `（${msg.imgUploaded}/${n} 张图片已自动上传到知乎图床）`;
+            if (!msg.loggedIn) return '⚠️ 含图片但未登录知乎，粘贴后图片可能无法显示，请先在知乎面板扫码登录';
+            return '⚠️ 图片上传失败，粘贴后可能无法显示，请手动上传';
+          })();
           const doCopy = () => {
             if (navigator.clipboard && window.ClipboardItem) {
               navigator.clipboard.write([new ClipboardItem({
                 'text/html':  new Blob([html], {type:'text/html'}),
                 'text/plain': new Blob([document.getElementById('preview-content').innerText||''], {type:'text/plain'}),
-              })]).then(()=>showToast('✅ 已复制！粘贴到知乎编辑器即可','success'))
+              })]).then(()=>showToast('✅ 已复制！粘贴到知乎编辑器即可' + _imgNote,'success'))
                  .catch(fallback);
             } else { fallback(); }
             function fallback() {
@@ -3397,7 +3405,7 @@
               const range = document.createRange();
               range.selectNodeContents(tmp);
               sel.removeAllRanges(); sel.addRange(range);
-              try { document.execCommand('copy'); showToast('✅ 已复制！粘贴到知乎编辑器即可','success'); }
+              try { document.execCommand('copy'); showToast('✅ 已复制！粘贴到知乎编辑器即可' + _imgNote,'success'); }
               catch(_) { showToast('复制失败，请手动选择复制','error'); }
               sel.removeAllRanges(); document.body.removeChild(tmp);
             }
