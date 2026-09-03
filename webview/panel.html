@@ -1005,6 +1005,9 @@
 
     <!-- 🐦 Twitter -->
     <button class="btn btn-twitter" id="btn-twitter" title="生成中文推文，用真实浏览器自动发布到 Twitter/X"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M4 4l16 16M20 4L4 20"/></svg>Twitter</button>
+
+    <!-- 🖼️ 封面（与社交平台同级） -->
+    <button class="btn btn-secondary" id="btn-cover" title="生成封面：小红书 / 微信首图 / 微信缩略图，支持预设背景图"><span class="brand-glyph" style="font-size:12px;">🖼</span>封面</button>
       </div><!-- /区② 发布主操作 -->
 
       <!-- 区③ 工具 -->
@@ -1069,13 +1072,6 @@
           <span class="dropdown-item-content">
             <span class="item-label">设置</span>
             <span class="item-desc">正文宽度 / 表格显示 / 预览选项</span>
-          </span>
-        </button>
-        <button class="dropdown-item" id="btn-cover">
-          <span class="item-icon">🖼️</span>
-          <span class="dropdown-item-content">
-            <span class="item-label">封面生成</span>
-            <span class="item-desc">小红书 1080×1440 高清封面</span>
           </span>
         </button>
       </div>
@@ -1539,13 +1535,20 @@
           </div>
           <p class="hint" style="margin:4px 0 0;">拖动标题、滚轮/滑条调大小 → 点「确认排版」设为默认值 → 导出即为所见（1080×1440 高清）。</p>
 
-          <label style="margin-top:10px;">背景图（自动设为默认）</label>
+          <label style="margin-top:10px;">背景图</label>
+          <!-- 作用范围：全局默认 / 仅当前文章 -->
+          <div style="display:flex;gap:6px;margin:6px 0 8px;">
+            <button class="btn btn-secondary" id="cover-bg-scope-global" data-scope="global" style="flex:1;padding:4px 8px;font-size:11px;border-color:#0f766e;color:#0f766e;">🌐 全局默认</button>
+            <button class="btn btn-secondary" id="cover-bg-scope-md" data-scope="md" style="flex:1;padding:4px 8px;font-size:11px;">📄 仅当前文章</button>
+          </div>
+          <p class="hint" id="cover-bg-scope-hint" style="margin:0 0 6px;color:#999;">默认背景：全局默认，所有文章都生效；仅当前文章：只对本篇生效。</p>
           <div style="display:flex;gap:6px;align-items:center;">
             <input type="text" id="cover-bg" placeholder="粘贴图片 URL 或选本地文件" style="flex:1;box-sizing:border-box;">
             <label class="btn btn-secondary" style="padding:5px 10px;cursor:pointer;margin:0;">选择<input type="file" id="cover-bg-file" accept="image/*" style="display:none;"></label>
           </div>
-          <div id="cover-bg-history" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;max-height:120px;overflow-y:auto;"></div>
-          <p class="hint" style="margin:4px 0 0;">上传后自动设为默认，历史保留可切换，点 ✕ 删除。</p>
+          <p class="hint" style="margin:6px 0 2px;color:#ccc;">🖼 内置预设背景</p>
+          <div id="cover-bg-history" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;max-height:150px;overflow-y:auto;"></div>
+          <p class="hint" style="margin:4px 0 0;">点击应用；✕ 删除（预设删除后重启会自动恢复）。</p>
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;">
             <button class="btn btn-secondary" id="btn-cover-confirm" title="将当前拖拽位置/大小设为以后默认值">✓ 确认排版</button>
@@ -2942,16 +2945,31 @@
         vscode.postMessage({ type:'coverSaveTitleState', x:_coverTitleState.x, y:_coverTitleState.y, fontSize:_coverTitleState.fontSize, width:_coverTitleState.width });
       }, 400);
     }
-    function coverRenderHistory(list, defaultId){
+    let _coverBgScope = 'global';   // 'global' | 'md'
+    function coverBgScopeButtons(){
+      const g=document.getElementById('cover-bg-scope-global');
+      const m=document.getElementById('cover-bg-scope-md');
+      const hint=document.getElementById('cover-bg-scope-hint');
+      if(g) g.style.borderColor = _coverBgScope==='global' ? '#0f766e' : '#444';
+      if(g) g.style.color = _coverBgScope==='global' ? '#0f766e' : '#aaa';
+      if(m) m.style.borderColor = _coverBgScope==='md' ? '#0f766e' : '#444';
+      if(m) m.style.color = _coverBgScope==='md' ? '#0f766e' : '#aaa';
+      if(hint) hint.textContent = _coverBgScope==='global'
+        ? '默认背景：全局默认，所有文章都生效'
+        : '默认背景：仅当前文章生效（其他文章仍用全局默认）';
+    }
+    function coverRenderHistory(list, defaultId, mdBgId){
       const c=document.getElementById('cover-bg-history');
       if(!c) return;
-      if(!list||!list.length){ c.innerHTML='<span style="font-size:11px;color:#666;">暂无历史，上传后自动保留</span>'; return; }
+      if(!list||!list.length){ c.innerHTML='<span style="font-size:11px;color:#666;">暂无背景，可用内置预设或上传</span>'; return; }
+      const activeId = mdBgId || defaultId;
       c.innerHTML=list.map(function(item){
-        const isDef=item.id===defaultId;
+        const isDef=item.id===activeId;
+        const isMd = item.id===mdBgId;
         return '<div data-id="'+item.id+'" style="position:relative;width:72px;height:96px;border:2px solid '+(isDef?'#ff2442':'#333')+';border-radius:6px;overflow:hidden;cursor:pointer;background:#111;" title="'+(item.name||'')+'">'
           +'<img src="'+item.dataUrl+'" style="width:100%;height:100%;object-fit:cover;">'
           +'<button data-del="'+item.id+'" style="position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;border:none;background:rgba(0,0,0,0.65);color:#fff;font-size:10px;cursor:pointer;line-height:16px;">×</button>'
-          +(isDef?'<span style="position:absolute;bottom:0;left:0;right:0;background:rgba(255,36,66,0.9);color:#fff;font-size:8px;text-align:center;padding:1px 0;">默认</span>':'')
+          +(isDef?'<span style="position:absolute;bottom:0;left:0;right:0;background:rgba(255,36,66,0.9);color:#fff;font-size:8px;text-align:center;padding:1px 0;">'+(isMd?'本篇':'默认')+'</span>':'')
           +'</div>';
       }).join('');
       c.querySelectorAll('[data-id]').forEach(function(el){
@@ -2959,7 +2977,10 @@
           if(e.target.hasAttribute('data-del')) return;
           const id=el.getAttribute('data-id');
           const it=list.find(function(x){return x.id===id;});
-          if(it){ _coverBgDataUrl=it.dataUrl; const inp=document.getElementById('cover-bg'); if(inp) inp.value='[历史] '+it.name; coverApplyPreview(); vscode.postMessage({type:'coverSetDefaultBg', id:id}); }
+          if(!it) return;
+          _coverBgDataUrl=it.dataUrl; const inp=document.getElementById('cover-bg'); if(inp) inp.value='['+(_coverBgScope==='md'?'本篇':'默认')+'] '+it.name; coverApplyPreview();
+          if (_coverBgScope==='md') vscode.postMessage({type:'coverSetBg', scope:'md', id:id});
+          else vscode.postMessage({type:'coverSetBg', scope:'global', id:id});
         });
       });
       c.querySelectorAll('[data-del]').forEach(function(btn){
@@ -3075,9 +3096,9 @@
         const reader=new FileReader();
         reader.onload=function(){
           const dataUrl=reader.result;
-          vscode.postMessage({ type:'coverSaveBg', dataUrl:dataUrl, name:f.name });
+          vscode.postMessage({ type:'coverSaveBg', dataUrl:dataUrl, name:f.name, scope:_coverBgScope==='md'?'md':'global' });
           _coverBgDataUrl=dataUrl; coverApplyPreview();
-          const inp=document.getElementById('cover-bg'); if(inp) inp.value='[本地文件] '+f.name;
+          const inp=document.getElementById('cover-bg'); if(inp) inp.value='['+(_coverBgScope==='md'?'本篇':'默认')+'] '+f.name;
         };
         reader.readAsDataURL(f);
         el.value='';
@@ -3095,6 +3116,14 @@
       if(btn) btn.addEventListener('click', function(){ setTimeout(function(){ vscode.postMessage({type:'coverGetHistory'}); }, 80); });
       // 首次若已打开也拉一次
       setTimeout(function(){ vscode.postMessage({type:'coverGetHistory'}); }, 800);
+    })();
+    // 作用范围切换（全局默认 / 仅当前文章）
+    (function(){
+      const g=document.getElementById('cover-bg-scope-global');
+      const m=document.getElementById('cover-bg-scope-md');
+      if(g) g.addEventListener('click', function(){ _coverBgScope='global'; coverBgScopeButtons(); });
+      if(m) m.addEventListener('click', function(){ _coverBgScope='md'; coverBgScopeButtons(); });
+      if(typeof coverBgScopeButtons==='function') coverBgScopeButtons();
     })();
     document.getElementById('btn-cover-generate').addEventListener('click', function(){
       const title=(document.getElementById('cover-title')||{}).value||currentTitle||'';
@@ -4116,16 +4145,19 @@
             });
             _coverTitleState = Object.assign({}, (_coverTitleStateByType[_coverType] || byType.xhs || {x:50,y:50,fontSize:78,width:70}));
           }
-          // 自动选中默认底图
-          const def = _coverBgHistory.find(function(b){return b.id===msg.defaultBgId;}) || _coverBgHistory[0];
+          // 自动选中默认底图（per-md 覆盖优先）
+          const mdBg = msg.mdBgId ? _coverBgHistory.find(function(b){return b.id===msg.mdBgId;}) : null;
+          const def = mdBg || _coverBgHistory.find(function(b){return b.id===msg.defaultBgId;}) || _coverBgHistory[0];
           if(def && !_coverBgDataUrl){
             _coverBgDataUrl = def.dataUrl;
-            const inp=document.getElementById('cover-bg'); if(inp) inp.value='[历史] '+def.name;
+            const inp=document.getElementById('cover-bg'); if(inp) inp.value='['+(mdBg?'本篇':'默认')+'] '+def.name;
           } else if(def && _coverBgHistory.length) {
-            // 若当前无选中，但历史有，则保持预览为默认（仅首次）
             if(!_coverBgDataUrl) { _coverBgDataUrl=def.dataUrl; }
           }
-          if(typeof coverRenderHistory==='function') coverRenderHistory(_coverBgHistory, msg.defaultBgId);
+          // 当前文章有独立覆盖时，把作用范围自动切到"仅当前文章"
+          if (msg.mdBgId) _coverBgScope = 'md';
+          else if (typeof coverBgScopeButtons === 'function') coverBgScopeButtons();
+          if(typeof coverRenderHistory==='function') coverRenderHistory(_coverBgHistory, msg.defaultBgId, msg.mdBgId);
           if(typeof coverApplyPreview==='function') coverApplyPreview();
           break;
         }

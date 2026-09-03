@@ -686,7 +686,18 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       try {
         const { spawn } = require('child_process');
         const title = (msg.title || '').trim() || readArticleMeta(mdPath).title || '未命名封面';
-        const bgDataUrl = msg.bgDataUrl || msg.bg || '';
+        let bgDataUrl = msg.bgDataUrl || msg.bg || '';
+        if (!bgDataUrl) {
+          // 未显式传背景时，用当前生效背景（per-md 覆盖优先，其次全局默认）
+          try {
+            const cfg = coverEnsurePresets(loadCoverConfig());
+            const bid = coverEffectiveBgId(cfg, mdPath);
+            if (bid) {
+              const it = cfg.bgs.find(b => b.id === bid);
+              if (it) bgDataUrl = coverGetBgDataUrl(it) || '';
+            }
+          } catch(_){}
+        }
         const tagline = msg.tagline || '';
         let bgPath = '';
         if (bgDataUrl && bgDataUrl.startsWith('data:')) {
@@ -747,10 +758,10 @@ async function handleWebviewMessage(msg, panel, mdPath) {
 
     case 'coverGetHistory': {
       try {
-        const cfg = loadCoverConfig();
-        const list = cfg.bgs.map(item=> ({ id:item.id, name:item.name, createdAt:item.createdAt, dataUrl: coverGetBgDataUrl(item) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: coverTitleStateByType(cfg) });
-      } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null, titleState: coverTitleStateByType(loadCoverConfig()) }); }
+        const cfg = coverEnsurePresets(loadCoverConfig());
+        const list = cfg.bgs.map(item=> ({ id:item.id, name:item.name, preset:!!item.preset, createdAt:item.createdAt, dataUrl: coverGetBgDataUrl(item) })).filter(x=>x.dataUrl);
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: coverEffectiveBgId(cfg, mdPath), mdBgId: (cfg.mdBgs&&cfg.mdBgs[mdPath])||null, titleState: coverTitleStateByType(cfg) });
+      } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null, mdBgId:null, titleState: coverTitleStateByType(loadCoverConfig()) }); }
       break;
     }
     case 'coverSaveBg': {
@@ -758,33 +769,54 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const dataUrl = msg.dataUrl;
         if (!dataUrl || !dataUrl.startsWith('data:')) throw new Error('请先选择图片');
         const { item, cfg } = coverSaveBgFromDataUrl(dataUrl, msg.name||'');
-        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: coverTitleStateByType(cfg) });
+        // scope=md：仅当前文章用这张背景（覆盖全局默认）
+        if (msg.scope === 'md') { cfg.mdBgs[mdPath] = item.id; saveCoverConfig(cfg); }
+        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, preset:!!it.preset, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: coverEffectiveBgId(cfg, mdPath), mdBgId: (cfg.mdBgs&&cfg.mdBgs[mdPath])||null, titleState: coverTitleStateByType(cfg) });
         panel.webview.postMessage({ type:'coverSaveBgDone', id:item.id, dataUrl: coverGetBgDataUrl(item) });
       } catch(e){ panel.webview.postMessage({ type:'coverSaveBgDone', ok:false, message:e.message }); }
       break;
     }
+    // 统一设置封面背景：scope='global' 写全局默认；scope='md' 仅当前文章（可传 id=null 清除 md 覆盖）
+    case 'coverSetBg': {
+      try {
+        const cfg = coverEnsurePresets(loadCoverConfig());
+        const scope = msg.scope === 'md' ? 'md' : 'global';
+        if (scope === 'md') {
+          if (msg.id && cfg.bgs.some(b=>b.id===msg.id)) cfg.mdBgs[mdPath] = msg.id;
+          else if (!msg.id) delete cfg.mdBgs[mdPath];
+        } else {
+          if (msg.id && cfg.bgs.some(b=>b.id===msg.id)) cfg.defaultBgId = msg.id;
+        }
+        saveCoverConfig(cfg);
+        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, preset:!!it.preset, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: coverEffectiveBgId(cfg, mdPath), mdBgId: (cfg.mdBgs&&cfg.mdBgs[mdPath])||null, titleState: coverTitleStateByType(cfg) });
+      } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null, mdBgId:null }); }
+      break;
+    }
     case 'coverSetDefaultBg': {
       try {
-        const cfg = loadCoverConfig();
-        if (cfg.bgs.some(b=>b.id===msg.id)) { cfg.defaultBgId = msg.id; saveCoverConfig(cfg); }
-        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: coverTitleStateByType(cfg) });
-      } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null }); }
+        const cfg = coverEnsurePresets(loadCoverConfig());
+        if (cfg.bgs.some(b=>b.id===msg.id)) { cfg.defaultBgId = msg.id; delete cfg.mdBgs[mdPath]; saveCoverConfig(cfg); }
+        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, preset:!!it.preset, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: coverEffectiveBgId(cfg, mdPath), mdBgId: (cfg.mdBgs&&cfg.mdBgs[mdPath])||null, titleState: coverTitleStateByType(cfg) });
+      } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null, mdBgId:null }); }
       break;
     }
     case 'coverDeleteBg': {
       try {
-        const cfg = loadCoverConfig();
+        const cfg = coverEnsurePresets(loadCoverConfig());
         const idx = cfg.bgs.findIndex(b=>b.id===msg.id);
         if (idx>=0) {
-          try{ fs.unlinkSync(cfg.bgs[idx].path); }catch(_){}
+          // 预设背景：只从列表移除（文件保留在扩展目录，重启后重新出现）
+          if (!cfg.bgs[idx].preset) { try{ fs.unlinkSync(cfg.bgs[idx].path); }catch(_){} }
           cfg.bgs.splice(idx,1);
           if (cfg.defaultBgId===msg.id) cfg.defaultBgId = cfg.bgs[0]?.id||null;
+          if (cfg.mdBgs && cfg.mdBgs[mdPath]===msg.id) delete cfg.mdBgs[mdPath];
           saveCoverConfig(cfg);
         }
-        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: coverTitleStateByType(cfg) });
+        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, preset:!!it.preset, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: coverEffectiveBgId(cfg, mdPath), mdBgId: (cfg.mdBgs&&cfg.mdBgs[mdPath])||null, titleState: coverTitleStateByType(cfg) });
       } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null }); }
       break;
     }
@@ -1886,6 +1918,10 @@ function saveSocialStore(mdPath, store) {
 }
 
 // ─── 封面底图历史 & 标题状态（存在 globalStorage） ───────────────
+// 内置预设背景目录（随扩展分发，位于 <extension>/assets/covers/）
+function coverPresetDir() {
+  try { return path.join(extContext.extensionUri.fsPath, 'assets', 'covers'); } catch(_) { return ''; }
+}
 function getCoverStoreDir() {
   try { return path.join(extContext.globalStorageUri.fsPath, 'cover'); } catch(_) { return path.join(os.tmpdir(), 'm2a_cover_store'); }
 }
@@ -1902,16 +1938,50 @@ function loadCoverConfig() {
     const p = getCoverConfigPath();
     if (fs.existsSync(p)) {
       const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-      return { defaultBgId: j.defaultBgId || null, titleState: j.titleState || null, bgs: Array.isArray(j.bgs) ? j.bgs : [] };
+      return { defaultBgId: j.defaultBgId || null, titleState: j.titleState || null, bgs: Array.isArray(j.bgs) ? j.bgs : [], mdBgs: (j.mdBgs && typeof j.mdBgs === 'object') ? j.mdBgs : {} };
     }
   } catch(_) {}
-  return { defaultBgId: null, titleState: null, bgs: [] };
+  return { defaultBgId: null, titleState: null, bgs: [], mdBgs: {} };
 }
 function saveCoverConfig(cfg) {
   try {
     ensureCoverStoreDir();
-    fs.writeFileSync(getCoverConfigPath(), JSON.stringify({ defaultBgId: cfg.defaultBgId||null, titleState: cfg.titleState||null, bgs: cfg.bgs||[] }, null, 2)+'\n','utf8');
+    fs.writeFileSync(getCoverConfigPath(), JSON.stringify({ defaultBgId: cfg.defaultBgId||null, titleState: cfg.titleState||null, bgs: cfg.bgs||[], mdBgs: cfg.mdBgs||{} }, null, 2)+'\n','utf8');
   } catch(e){ log('保存封面配置失败: '+e.message); }
+}
+/** 把扩展内置的预设背景注册进 cfg.bgs（带 preset 标记，删除后重启会重新出现） */
+function coverEnsurePresets(cfg) {
+  try {
+    const dir = coverPresetDir();
+    if (!dir || !fs.existsSync(dir)) return cfg;
+    const files = fs.readdirSync(dir).filter(f => /^preset-.+\.(png|jpe?g)$/i.test(f));
+    if (!files.length) return cfg;
+    const haveIds = new Set((cfg.bgs||[]).map(b => b.id));
+    let changed = false;
+    for (const f of files) {
+      const id = 'preset-' + f.replace(/^preset-/, '').replace(/\.(png|jpe?g)$/i, '');
+      if (haveIds.has(id)) continue;
+      const name = {
+        'preset-dreamy':  '梦境蓝紫',
+        'preset-sunset':  '落日橙紫',
+        'preset-minimal': '极简灰白',
+        'preset-forest':  '墨绿森林',
+        'preset-night':   '夜空繁星',
+        'preset-mint':    '清新薄荷',
+      }[id] || id.replace('preset-','');
+      cfg.bgs.push({ id, ext: f.match(/jpe?g$/i) ? 'jpg' : 'png', name, preset: true, presetFile: f, path: path.join(dir, f), createdAt: new Date().toISOString() });
+      haveIds.add(id);
+      changed = true;
+    }
+    // 若无任何默认背景，把第一个预设设为默认
+    if (changed && !cfg.defaultBgId && cfg.bgs.length) cfg.defaultBgId = cfg.bgs[0].id;
+    return cfg;
+  } catch(e) { return cfg; }
+}
+/** 当前 mdPath 生效的背景 id：per-md 覆盖优先，其次全局默认 */
+function coverEffectiveBgId(cfg, mdPath) {
+  if (mdPath && cfg.mdBgs && cfg.mdBgs[mdPath]) return cfg.mdBgs[mdPath];
+  return cfg.defaultBgId || null;
 }
 /**
  * 归一化封面排版配置为「按类型」的映射，兼容旧版平面对象格式
@@ -1939,7 +2009,8 @@ function coverSaveBgFromDataUrl(dataUrl, nameHint) {
   const id = Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,6);
   const fp = coverBgFilePath(id, ext);
   fs.writeFileSync(fp, Buffer.from(b64,'base64'));
-  const cfg = loadCoverConfig();
+  let cfg = loadCoverConfig();
+  cfg = coverEnsurePresets(cfg);
   const item = { id, ext, name: (nameHint||'').slice(0,40) || `bg_${id}`, createdAt: new Date().toISOString(), path: fp };
   cfg.bgs.unshift(item);
   // 超过 20 张自动只保留最新 20
