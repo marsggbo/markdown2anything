@@ -110,6 +110,12 @@ if (!skipBuild) {
   };
   walk(TMP);
 
+  // md2wechat 变体需用不同的 displayName（Marketplace 同一 publisher 下 display name 唯一）
+  const pkgPath = path.join(TMP, 'package.json');
+  const pkgL = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  pkgL.displayName = 'MD Export — Markdown 一键导出微信/知乎/小红书/Twitter（Markdown2Anything 同步版）';
+  fs.writeFileSync(pkgPath, JSON.stringify(pkgL, null, 2));
+
   console.log('── 打包 md2wechat ──');
   sh(`npx --yes @vscode/vsce package --out ${vsixLegacy}`, { cwd: TMP, env });
   // 把产物移到仓库根
