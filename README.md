@@ -128,3 +128,34 @@ AI 把长文拆成串推 thread，每条控制在 280 字内，配图自动按�
 ---
 
 *Made with ❤️ by [marsggbo](https://github.com/marsggbo)*
+
+---
+
+## 🌐 网页版（无需安装）
+
+不装 VS Code 也能写：**[https://marsggbo.github.io/markdown2anything/](https://marsggbo.github.io/markdown2anything/)**
+
+浏览器打开即用：CodeMirror 双栏编辑 + 实时预览（公式/代码/图片/表格），支持微信/知乎一键复制、小红书长图导出、图片插入（文件/粘贴/URL）、自动保存、14 套主题。
+
+## 🖥️ Electron 桌面版（macOS dmg）
+
+复用同一套网页 UI，额外支持本地文件打开/保存。在本机 macOS 上打包：
+
+```bash
+npm install                # 安装依赖（含 electron 二进制，需网络）
+npm run electron:dist      # 打包 dmg（Intel）/ Apple Silicon 用 npm run electron:dist:arm64
+```
+
+产物在 `dist/` 目录（`Markdown2Anything-4.0.0-x64.dmg` 等）。网页版功能在桌面版内全部可用。
+
+> 网页版与桌面版共用同一套 `web/` 渲染核心与 UI，任何一端的功能改进另一端自动同步。
+
+---
+
+## 更新日志
+
+详见 [CHANGELOG.md](./CHANGELOG.md)
+
+---
+
+*Made with ❤️ by [marsggbo](https://github.com/marsggbo)*
