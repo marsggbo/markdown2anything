@@ -128,45 +128,210 @@ def summarize(md):
   }
 
   // ── 复制（微信/知乎）──
-  function bodyToCopyHtml(bodyHtml, opts = {}) {
-    // 微信/知乎复制：公式转 mdnice 兼容结构 + 主题内联
+  // hljs 颜色映射（与插件 lib/converter.js 一致，内联到 span 供粘贴）
+  const HLJS_COLOR_MAP = {
+    'hljs-doctag': '#d73a49', 'hljs-keyword': '#d73a49', 'hljs-meta': '#d73a49',
+    'hljs-template-tag': '#d73a49', 'hljs-template-variable': '#d73a49',
+    'hljs-type': '#d73a49', 'hljs-variable.language_': '#d73a49',
+    'hljs-title': '#6f42c1', 'hljs-title.class_': '#6f42c1', 'hljs-title.function_': '#6f42c1',
+    'hljs-attr': '#005cc5', 'hljs-attribute': '#005cc5', 'hljs-literal': '#005cc5',
+    'hljs-number': '#005cc5', 'hljs-operator': '#005cc5', 'hljs-variable': '#005cc5',
+    'hljs-selector-attr': '#005cc5', 'hljs-selector-class': '#005cc5', 'hljs-selector-id': '#005cc5',
+    'hljs-regexp': '#032f62', 'hljs-string': '#032f62',
+    'hljs-built_in': '#e36209', 'hljs-symbol': '#e36209',
+    'hljs-comment': '#6a737d', 'hljs-code': '#6a737d', 'hljs-formula': '#6a737d',
+    'hljs-name': '#22863a', 'hljs-quote': '#22863a',
+    'hljs-selector-tag': '#22863a', 'hljs-selector-pseudo': '#22863a',
+    'hljs-subst': '#24292e',
+    'hljs-section': '#005cc5', 'hljs-bullet': '#735c0f',
+    'hljs-addition': '#22863a', 'hljs-deletion': '#b31d28',
+    'hljs-emphasis': '#24292e', 'hljs-strong': '#24292e',
+  };
+
+  // 内联 hljs 颜色到 span（插件 inlineHljsColors 同款）
+  function inlineHljsColors(highlighted) {
+    return highlighted.replace(
+      /<span class="([^"]+)">/g,
+      (m, classes) => {
+        const classList = classes.trim().split(/\s+/);
+        let color = HLJS_COLOR_MAP[classList.join('.')];
+        if (!color) {
+          for (const c of classList) {
+            if (HLJS_COLOR_MAP[c]) { color = HLJS_COLOR_MAP[c]; break; }
+          }
+        }
+        return color ? `<span style="color:${color};">` : `<span>`;
+      }
+    );
+  }
+
+  // 代码块处理（插件 applyCodeBlocksForWechat 同款）：
+  // 反转 hljs 转义拿纯文本 → 重新高亮 → 内联颜色 → 空格转 &nbsp;、换行转 <br>
+  const SVG_DOTS =
+    `<svg width="52" height="12" viewBox="0 0 52 12" fill="none" xmlns="http://www.w3.org/2000/svg">` +
+    `<circle cx="6" cy="6" r="6" fill="#FF5F56"/><circle cx="26" cy="6" r="6" fill="#FFBD2E"/><circle cx="46" cy="6" r="6" fill="#27C93F"/></svg>`;
+
+  function prepareCodeBlocksForCopy(html) {
+    return html.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/g, (fullMatch, preContent) => {
+      const codeMatch = preContent.match(/<code([^>]*)>([\s\S]*?)<\/code>/);
+      if (!codeMatch) return fullMatch;
+      const [, codeAttrs, codeContent] = codeMatch;
+      const langMatch = codeAttrs.match(/class="[^"]*(?:hljs\s+|language-)([\w-]+)/);
+      const language = langMatch ? langMatch[1] : 'plaintext';
+      // 反转 hljs 转义拿纯文本
+      const rawCode = codeContent
+        .replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&nbsp;/g, ' ')
+        .replace(/<br\s*\/?>/gi, '\n');
+      let highlighted;
+      try { highlighted = M2A.hljs.highlight(rawCode, { language }).value; }
+      catch (_) { highlighted = M2A.hljs.highlightAuto(rawCode).value; }
+      highlighted = inlineHljsColors(highlighted);
+      // 换行→<br>，空格→&nbsp;（只操作文本节点，标签间不动）
+      highlighted = highlighted.replace(/(<[^>]*>)|([^<]+)/g, (m, tag, txt) => {
+        if (tag) return tag;
+        return txt.replace(/\r\n|\r|\n/g, '<br>').replace(/ /g, '&nbsp;');
+      });
+      return (
+        `<pre class="mac-code" style="font-size:90%;overflow-x:auto;border-radius:8px;padding:0;line-height:1.5;margin:10px 8px;background-color:#f6f8fa;border:1px solid #eaedf0;">` +
+        `<span class="mac-dots" style="display:block;margin:12px 16px 0;">${SVG_DOTS}</span>` +
+        `<code class="hljs ${language}" style="display:block;padding:0.5em 1em 1em;overflow-x:auto;text-indent:0;color:inherit;background:none;white-space:pre-wrap;word-break:break-all;margin:0;">${highlighted}</code>` +
+        `</pre>`
+      );
+    });
+  }
+
+  let katexCssCache = '';
+  async function getKatexCss() {
+    if (katexCssCache) return katexCssCache;
+    // 从已加载的 <link> 读取 cssRules（线上同源可用）；file:// 下降级 fetch
+    let css = '';
+    try {
+      const link = document.querySelector('link[href*="katex"]');
+      if (link && link.sheet) {
+        css = Array.from(link.sheet.cssRules || []).map((r) => r.cssText).join('\n');
+      }
+    } catch (_) {}
+    if (!css) {
+      try {
+        const res = await fetch('vendor/katex/katex.min.css');
+        css = await res.text();
+      } catch (_) {}
+    }
+    // 字体 URL 转绝对路径（相对路径在内联 <style> 后失效）
+    if (css) {
+      const base = new URL('vendor/katex/', window.location.href);
+      css = css.replace(/url\(([^)]+)\)/g, (m, u) => {
+        u = u.trim().replace(/^["']|["']$/g, '');
+        if (/^(data:|https?:|\/)/.test(u)) return m;
+        return `url(${new URL(u, base).href})`;
+      });
+      katexCssCache = css;
+    }
+    return katexCssCache;
+  }
+
+  // ── MathJax 浏览器版：生成 mdnice SVG（与插件一致，公式不依赖 CSS 字体）──
+  let mjxPromise = null;
+  function loadMathJax() {
+    if (!mjxPromise) {
+      mjxPromise = new Promise((resolve, reject) => {
+        if (window.MathJax && typeof window.MathJax.tex2svgPromise === 'function') { resolve(); return; }
+        const s = document.createElement('script');
+        s.src = 'vendor/mathjax/tex-svg.js';
+        s.onload = () => {
+          // 等待 MathJax 初始化
+          const M = window.MathJax;
+          const check = () => {
+            if (M && typeof M.tex2svgPromise === 'function') resolve();
+            else setTimeout(check, 100);
+          };
+          check();
+        };
+        s.onerror = () => reject(new Error('MathJax 加载失败'));
+        document.head.appendChild(s);
+      });
+    }
+    return mjxPromise;
+  }
+
+  async function mathToSvg(latex, isDisplay) {
+    await loadMathJax();
+    const node = await window.MathJax.tex2svgPromise(latex, { display: isDisplay, em: 16, ex: 8, containerWidth: 600 });
+    const outer = node.outerHTML || new XMLSerializer().serializeToString(node);
+    const svgMatch = outer.match(/<svg[\s\S]*<\/svg>/);
+    if (!svgMatch) throw new Error('MathJax 未能生成 SVG');
+    return svgMatch[0];
+  }
+
+  /**
+   * 生成可粘贴 HTML
+   * platform: 'wechat' | 'zhihu'
+   *  - 微信：公式 KaTeX HTML + 内联 KaTeX CSS；代码内联颜色
+   *  - 知乎：公式用 zhihu.com/equation 图片 + eeimg 标记（不依赖 CSS）
+   */
+  async function buildCopyHtml(bodyHtml, platform, theme) {
     const div = document.createElement('div');
     div.innerHTML = bodyHtml;
-    // 公式处理：KaTeX HTML 输出 + mdnice data-formula 结构
-    div.querySelectorAll('.math-block, .math-inline').forEach((el) => {
+    const isWechat = platform === 'wechat';
+    // ── 公式处理 ──
+    for (const el of div.querySelectorAll('.math-block, .math-inline')) {
       const latex = el.getAttribute('data-math') || '';
       const isDisplay = el.classList.contains('math-block') || el.getAttribute('data-display') === 'true';
-      try {
-        const html = M2A.katex.renderToString(latex, { displayMode: isDisplay, throwOnError: false, output: 'html', strict: false });
-        if (isDisplay) {
-          const sec = document.createElement('section');
-          sec.setAttribute('data-tools', 'mdnice编辑器');
-          sec.setAttribute('data-id', '88');
-          sec.style.cssText = 'text-align:center;margin:1.2em 0;';
-          sec.innerHTML = `<span class="block-equation" data-formula="${escapeHtml(latex)}" style="display:block;text-align:center;">${html}</span>`;
-          el.replaceWith(sec);
-        } else {
-          const span = document.createElement('span');
-          span.className = 'inline-equation';
-          span.setAttribute('data-formula', latex);
-          span.style.cssText = 'display:inline-block;';
-          span.innerHTML = html;
-          el.replaceWith(span);
+      const imgUrl = 'https://www.zhihu.com/equation?tex=' + encodeURIComponent(latex);
+      if (isWechat) {
+        // 微信：mdnice SVG（MathJax 生成，不依赖 CSS 字体，任何环境显示）
+        try {
+          const svgStr = await mathToSvg(latex, isDisplay);
+          if (isDisplay) {
+            const sec = document.createElement('section');
+            sec.setAttribute('data-tools', 'mdnice编辑器');
+            sec.setAttribute('data-id', '88');
+            sec.style.cssText = 'text-align:center;margin:1.2em 0;';
+            sec.innerHTML = `<span class="block-equation" data-formula="${escapeHtml(latex)}" style="display:block;text-align:center;">${svgStr}</span>`;
+            el.replaceWith(sec);
+          } else {
+            // 提取 SVG vertical-align 保持行内对齐
+            const vaMatch = svgStr.match(/style="[^"]*vertical-align:\s*(-?[\d.]+)/);
+            const va = vaMatch ? vaMatch[1] : '-0.1em';
+            const span = document.createElement('span');
+            span.className = 'inline-equation';
+            span.setAttribute('data-formula', latex);
+            span.style.cssText = `display:inline-block;vertical-align:${va}em;`;
+            span.innerHTML = svgStr;
+            el.replaceWith(span);
+          }
+        } catch (_) {
+          // 降级：知乎公式图片
+          if (isDisplay) el.outerHTML = `<div style="text-align:center;margin:1.2em 0;"><img src="${imgUrl}"></div>`;
+          else el.outerHTML = `<img src="${imgUrl}" style="display:inline-block;vertical-align:-0.1em;">`;
         }
-      } catch (_) {
-        // 降级 zhihu equation
-        const imgUrl = 'https://www.zhihu.com/equation?tex=' + encodeURIComponent(latex);
-        if (isDisplay) el.outerHTML = `<div style="text-align:center;margin:1.2em 0;"><img src="${imgUrl}"></div>`;
-        else el.outerHTML = `<img src="${imgUrl}" style="display:inline-block;vertical-align:-0.1em;">`;
+      } else {
+        // 知乎：zhihu.com/equation 图片 + eeimg 标记
+        if (isDisplay) {
+          el.outerHTML = `<p><img eeimg="1" src="${imgUrl}" alt="\\\\${escapeHtml(latex)}"></p>`;
+        } else {
+          el.outerHTML = `<img eeimg="1" src="${imgUrl}" alt="${escapeHtml(latex)}">`;
+        }
       }
-    });
-    return div.innerHTML;
+    }
+    let html = div.innerHTML;
+    // ── 代码块：内联颜色 + 空格/换行保留 ──
+    html = prepareCodeBlocksForCopy(html);
+    // ── 图片检测：data URI 图片（知乎/微信不支持，需要外链）──
+    const dataUriImgs = (html.match(/<img[^>]+src="data:image[^"]*"/g) || []).length;
+    return { html, dataUriImgs };
   }
 
   async function copyHtml(platform) {
     const theme = M2A.getTheme(currentThemeId);
-    let html = bodyToCopyHtml(currentBodyHtml);
-    // 包一层 article-wrapper + 主题 CSS 内联到 style
+    const { html, dataUriImgs } = await buildCopyHtml(currentBodyHtml, platform, theme);
+    // 组装完整可粘贴 HTML（公式已是 SVG 自包含，仅需主题 CSS 内联）
     const full = `<style>${theme.css}</style><div class="article-wrapper" style="padding:16px;background:${theme.wrapperBg};font-family:system-ui,-apple-system,'PingFang SC',sans-serif;">${html}</div>`;
     try {
       // 关键：必须写 text/html MIME，粘贴时目标编辑器才识别为富文本而非源码
@@ -176,7 +341,12 @@ def summarize(md):
       const htmlBlob = new Blob([full], { type: 'text/html' });
       const item = new ClipboardItem({ 'text/html': htmlBlob, 'text/plain': textBlob });
       await navigator.clipboard.write([item]);
-      showToast(`✅ 已复制${platform === 'wechat' ? '微信' : '知乎'}格式，去编辑器 Ctrl+V / ⌘V 粘贴`, 'success');
+      const name = platform === 'wechat' ? '微信' : '知乎';
+      if (dataUriImgs > 0) {
+        showToast(`⚠️ 已复制，但 ${name} 不支持 base64 内嵌图片（${dataUriImgs} 张），请改用外链图片 URL`, 'error');
+      } else {
+        showToast(`✅ 已复制${name}格式，去编辑器 Ctrl+V / ⌘V 粘贴`, 'success');
+      }
     } catch (e) {
       // 降级：老浏览器不支持 ClipboardItem 时退回纯文本
       try {

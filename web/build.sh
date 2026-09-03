@@ -23,11 +23,15 @@ CMEOF
 echo "── 3/4 复制 html2canvas ──"
 cp node_modules/html2canvas/dist/html2canvas.min.js web/vendor/html2canvas.min.js
 
-echo "── 4/4 复制 KaTeX CSS + 字体 + hljs 主题 ──"
+echo "── 4/5 复制 KaTeX CSS + 字体 + hljs 主题 ──"
 mkdir -p web/vendor/katex
 cp node_modules/katex/dist/katex.min.css web/vendor/katex/katex.min.css
 cp -r node_modules/katex/dist/fonts web/vendor/katex/fonts
 cp node_modules/highlight.js/styles/github.css web/vendor/github.css
+
+echo "── 5/5 复制 MathJax（公式转 SVG，供微信复制）──"
+mkdir -p web/vendor/mathjax
+cp node_modules/mathjax-full/es5/tex-svg.js web/vendor/mathjax/tex-svg.js
 
 echo "✅ 构建完成"
 ls -la web/m2a-render.js web/vendor/codemirror.bundle.js web/vendor/html2canvas.min.js web/vendor/github.css

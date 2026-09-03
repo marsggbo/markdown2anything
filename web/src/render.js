@@ -167,4 +167,4 @@ export function renderMarkdown(mdText, opts = {}) {
   return { bodyHtml, title: title || '未命名文档', rawMarkdown: raw };
 }
 
-export { THEMES, getTheme, DEFAULT_THEME_ID, katex };
+export { THEMES, getTheme, DEFAULT_THEME_ID, katex, hljs };
