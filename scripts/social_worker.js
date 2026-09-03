@@ -631,19 +631,29 @@ async function publishZhihu(page, def, { title, html, images, mode }) {
   // 127.0.0.1 → 编辑器里所有图片都显示「上传失败」（诊断：Editable-imageUploader is-error）。
   //
   // 现在改成走编辑器自己的上传通道（和自动发布小红书同一套做法）：
-  //   a. 正文里图片 src 先用唯一占位符（m2a-img-0/1/2...），粘贴时知乎不会去抓
-  //   b. 正文粘贴成功后再把本地图片逐个喂给编辑器的 <input type=file accept=image/*>
-  //      让知乎自己上传，回读它生成的 zhimg CDN 地址
-  //   c. 用真实 CDN 地址替换正文里的占位符（直接改编辑器 DOM 里对应 img 的 src）
+  //   a. 正文里图片先替换成【占位段落】（不是 img 标签！），粘贴时知乎不会把它
+  //      当成图片去加载/上传，避免产生「图片导入失败」的红色失败占位
+  //   b. 粘贴正文成功后，逐个把本地图片喂给编辑器的 file input 让知乎上传
+  //   c. 回读上传后的 zhimg CDN 地址，用 Playwright 把占位段落替换为真实图片节点
   step(1, totalSteps, '准备图片');
-  const imgPlaceholders = (images || []).map((_, i) => `__M2A_IMG_${i}__`);
+  const imgCount = (images && images.length) || 0;
   let finalHtml = html;
-  if (images && images.length) {
+  if (imgCount > 0) {
     let i = 0;
-    finalHtml = finalHtml.replace(/src="data:image[^"]*"/g, () => `src="${imgPlaceholders[i++]}"`);
+    // 用带 data 属性的空段落做占位，知乎不会把它当图片尝试加载
+    finalHtml = finalHtml.replace(/<img[^>]*src="data:image[^"]*"[^>]*>/g, () => {
+      const idx = i++;
+      return `<p data-m2a-img="${idx}">​</p>`;
+    });
+    // 兼容 figure 包裹的图片
+    finalHtml = finalHtml.replace(/<figure[^>]*>[\s\S]*?<\/figure>/g, (m) => {
+      if (!/data:image/.test(m)) return m;
+      const idx = i++;
+      return `<p data-m2a-img="${idx}">​</p>`;
+    });
   }
 
-  // ── ③ 整篇粘贴（正文 + 图片占位符）──
+  // ── ③ 整篇粘贴（正文 + 图片占位段落）──
   step(2, totalSteps, '粘贴正文');
   const plain = finalHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
@@ -665,10 +675,10 @@ async function publishZhihu(page, def, { title, html, images, mode }) {
   }
   info(`正文已填入（${got.trim().length} 字）`);
 
-  // ── ④ 用编辑器自己的上传控件逐张传图，回读 zhimg 地址替换占位符 ──
-  if (images && images.length) {
+  // ── ④ 用编辑器自己的上传控件逐张传图，把占位段落替换为真实图片 ──
+  if (imgCount > 0) {
     step(3, totalSteps, '上传图片');
-    // 知乎编辑器有多个 file input（附件/图片等），用 accept 含 image/ 的图片上传控件
+    // 知乎编辑器有多个 file input，用 accept 含 image/ 的图片上传控件
     const imgInputSel = 'input[type="file"][accept*="image/"]';
     const imgInput = page.locator(imgInputSel).first();
     await imgInput.waitFor({ state: 'attached', timeout: 20000 })
@@ -677,39 +687,56 @@ async function publishZhihu(page, def, { title, html, images, mode }) {
     const uploaded = [];
     for (let i = 0; i < images.length; i++) {
       info(`正在上传图片 ${i + 1}/${images.length}…`);
-      // 每次重新取控件：上传完第一张后知乎会重建 input，复用旧句柄会失效
+      // 每次重新取控件：上传完一张后知乎会重建 input
       await page.locator(imgInputSel).first().setInputFiles(images[i], { timeout: 60000 });
-      // 等知乎把这一个占位符对应的 <img> 换成 zhimg CDN 地址
-      const ph = imgPlaceholders[i];
-      let ok = false;
+
+      // 等这一张上传完成：知乎编辑器底部会出现刚上传成功的图片（最新一张 zhimg img）
+      let newUrl = '';
       const deadline = Date.now() + 60000;
       while (Date.now() < deadline) {
-        const src = await editor.evaluate((el, phh) => {
-          const imgs = [...el.querySelectorAll('img')];
-          const t = imgs.find(x => (x.getAttribute('src') || '').includes(phh));
-          return t ? (t.getAttribute('src') || '') : '';
-        }, ph).catch(() => '');
-        if (src && /zhimg\.com/.test(src)) { uploaded.push(src); ok = true; break; }
-        await page.waitForTimeout(2000);
+        // 取编辑器里最后出现的、尚未记录的 zhimg 图地址（本次新上传的）
+        const lastZhimg = await editor.evaluate(uploadedArr => {
+          const imgs = [...document.querySelectorAll('.public-DraftEditor-content img, div[contenteditable="true"] img')];
+          const zh = imgs.filter(x => /zhimg\.com/.test(x.getAttribute('src') || ''));
+          for (let k = zh.length - 1; k >= 0; k--) {
+            const s = zh[k].getAttribute('src') || '';
+            if (s && !uploadedArr.includes(s)) return s;
+          }
+          return '';
+        }, uploaded).catch(() => '');
+        if (lastZhimg) { newUrl = lastZhimg; break; }
+        await page.waitForTimeout(1500);
       }
-      if (!ok) info(`⚠️ 第 ${i + 1} 张图未检测到上传完成，可能还在处理`);
+
+      if (newUrl) {
+        uploaded.push(newUrl);
+        // 把对应的占位段落替换为真实图片节点
+        await editor.evaluate(({ idx, url }) => {
+          const ph = document.querySelector(`p[data-m2a-img="${idx}"]`);
+          if (ph) {
+            const img = document.createElement('img');
+            img.setAttribute('src', url);
+            img.setAttribute('eeimg', '1');
+            ph.replaceWith(img);
+          }
+        }, { idx: i, url: newUrl }).catch(() => {});
+      } else {
+        info(`⚠️ 第 ${i + 1} 张图未检测到上传完成`);
+      }
     }
 
     if (uploaded.length === images.length) {
       info(`✅ 全部 ${uploaded.length} 张图已上传到知乎图床`);
     } else if (uploaded.length > 0) {
       info(`⚠️ 只有 ${uploaded.length}/${images.length} 张图确认上传成功`);
+    } else {
+      info(`⚠️ 图片上传未成功，正文和代码块都在，图片可在浏览器里手动补传`);
     }
 
-    // 回读：若知乎在上传时挪动了图片顺序或替换了节点，把占位符统一替换为已上传地址
-    await editor.evaluate((el, map) => {
-      [...el.querySelectorAll('img')].forEach(img => {
-        const src = img.getAttribute('src') || '';
-        for (const [ph, url] of Object.entries(map)) {
-          if (src.includes(ph)) { img.setAttribute('src', url); break; }
-        }
-      });
-    }, Object.fromEntries(imgPlaceholders.map((ph, i) => [ph, uploaded[i] || '']))).catch(() => {});
+    // 清理可能的残留失败占位（知乎粘贴时若把占位段当成图片产生的红色失败框）
+    await editor.evaluate(el => {
+      el.querySelectorAll('figure.Editable-imageUploader, .Editable-imageUploader').forEach(f => f.remove());
+    }).catch(() => {});
   }
 
   step(4, totalSteps, '内容就绪');

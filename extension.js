@@ -341,6 +341,15 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
+    case 'savePreviewSetting': {
+      // 预览设置（正文宽度等）全局持久化到 VS Code 配置
+      const cfg = vscode.workspace.getConfiguration('markdown2anything');
+      if (msg.key === 'contentWidth' && msg.value) {
+        await cfg.update('preview.contentWidth', String(msg.value), vscode.ConfigurationTarget.Global);
+      }
+      break;
+    }
+
     case 'upload': {
       await handleUpload(msg, panel, mdPath);
       break;
@@ -552,20 +561,36 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         // 若用户已登录知乎，自动上传图片到知乎图床替换为 CDN URL，粘贴即可显示。
         const imgCount = (html.match(/data:image\//g) || []).length;
         const cookieStr = await getZhihuCookie();
+        const loggedIn = zhihu.isLoggedIn(cookieStr);
         let imgUploaded = 0;
-        if (imgCount > 0 && zhihu.isLoggedIn(cookieStr)) {
+        let imgReused = 0;
+
+        if (imgCount > 0 && loggedIn) {
           panel.webview.postMessage({ type: 'zhihuHtmlProgress', message: `正在上传 ${imgCount} 张图片到知乎图床...` });
           try {
-            const up = await zhihu.uploadImagesInHtml(html, cookieStr);
+            // 去重缓存：图片内容 md5 → CDN URL，存 globalState 持久化（重启不丢）
+            const cacheKey = 'zhihu.imgCache';
+            const cache = extContext.globalState.get(cacheKey, {});
+            const up = await zhihu.uploadImagesInHtml(html, cookieStr, null, cache);
             html = up.html;
             imgUploaded = up.total - up.failed;
-            log(`知乎复制：图片上传 ${imgUploaded}/${up.total} 成功`);
+            imgReused = up.reused || 0;
+            // 持久化缓存（限制条数防膨胀）
+            const entries = Object.entries(cache);
+            if (entries.length > 500) {
+              // 保留最近 500 条
+              const trimmed = Object.fromEntries(entries.slice(-500));
+              await extContext.globalState.update(cacheKey, trimmed);
+            } else {
+              await extContext.globalState.update(cacheKey, cache);
+            }
+            log(`知乎复制：图片 ${imgUploaded}/${up.total} 上传成功${imgReused ? `，${imgReused} 张复用缓存` : ''}`);
             if (up.failed > 0) log(`知乎复制：${up.failed} 张图片上传失败，已保留原图`);
           } catch (err) {
             log(`知乎复制：图片上传异常 ${err.message}`);
           }
         }
-        panel.webview.postMessage({ type: 'zhihuHtml', html, imgCount, imgUploaded, loggedIn: zhihu.isLoggedIn(cookieStr) });
+        panel.webview.postMessage({ type: 'zhihuHtml', html, imgCount, imgUploaded, imgReused, loggedIn });
       } catch (err) {
         log(`buildZhihuCopyHtml 失败: ${err.message}`);
         panel.webview.postMessage({ type: 'zhihuHtmlError', message: err.message });
@@ -647,7 +672,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         try {
           const cfg2 = loadCoverConfig();
           const list2 = cfg2.bgs.map(function(it){ return { id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) }; }).filter(function(x){return x.dataUrl;});
-          panel.webview.postMessage({ type:'coverHistory', bgs: list2, defaultBgId: cfg2.defaultBgId, titleState: cfg2.titleState||{x:50,y:50,fontSize:78,width:70} });
+          panel.webview.postMessage({ type:'coverHistory', bgs: list2, defaultBgId: cfg2.defaultBgId, titleState: coverTitleStateByType(cfg2) });
         } catch(_){}
       } catch (e) {
         // 404 等表示不支持生图，降级为只给 prompt
@@ -678,9 +703,14 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const base = path.basename(mdPath, path.extname(mdPath));
         const outDir = path.join(path.dirname(mdPath), `${base}_cover`);
         if (!fs.existsSync(outDir)) fs.mkdirSync(outDir,{recursive:true});
-        const outPath = path.join(outDir, `cover_${Date.now()}.png`);
+        // 封面类型 → 输出尺寸（默认小红书 1080×1440）
+        const coverType = msg.type || 'xhs';
+        const cw = Number(msg.width) || 1080;
+        const ch = Number(msg.height) || 1440;
+        const typeTag = coverType === 'xhs' ? '' : `_${coverType}`;
+        const outPath = path.join(outDir, `cover${typeTag}_${Date.now()}.png`);
         const scriptPath = path.join(extContext.extensionUri.fsPath, 'scripts', 'cover.js');
-        const args=[scriptPath, '--title', title, '--out', outPath, '--width','1080','--height','1440'];
+        const args=[scriptPath, '--title', title, '--out', outPath, '--width', String(cw), '--height', String(ch)];
         if (bgPath) args.push('--bg', bgPath);
         if (tagline) args.push('--tagline', tagline);
         if (msg.titleState) args.push('--titleState', JSON.stringify(msg.titleState));
@@ -719,8 +749,8 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       try {
         const cfg = loadCoverConfig();
         const list = cfg.bgs.map(item=> ({ id:item.id, name:item.name, createdAt:item.createdAt, dataUrl: coverGetBgDataUrl(item) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: cfg.titleState || { x:50, y:50, fontSize:78, width:70 } });
-      } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null, titleState:{x:50,y:50,fontSize:78,width:70} }); }
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: coverTitleStateByType(cfg) });
+      } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null, titleState: coverTitleStateByType(loadCoverConfig()) }); }
       break;
     }
     case 'coverSaveBg': {
@@ -729,7 +759,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         if (!dataUrl || !dataUrl.startsWith('data:')) throw new Error('请先选择图片');
         const { item, cfg } = coverSaveBgFromDataUrl(dataUrl, msg.name||'');
         const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: cfg.titleState||{x:50,y:50,fontSize:78,width:70} });
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: coverTitleStateByType(cfg) });
         panel.webview.postMessage({ type:'coverSaveBgDone', id:item.id, dataUrl: coverGetBgDataUrl(item) });
       } catch(e){ panel.webview.postMessage({ type:'coverSaveBgDone', ok:false, message:e.message }); }
       break;
@@ -739,7 +769,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const cfg = loadCoverConfig();
         if (cfg.bgs.some(b=>b.id===msg.id)) { cfg.defaultBgId = msg.id; saveCoverConfig(cfg); }
         const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: cfg.titleState||{x:50,y:50,fontSize:78,width:70} });
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: coverTitleStateByType(cfg) });
       } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null }); }
       break;
     }
@@ -754,16 +784,22 @@ async function handleWebviewMessage(msg, panel, mdPath) {
           saveCoverConfig(cfg);
         }
         const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: cfg.titleState||{x:50,y:50,fontSize:78,width:70} });
+        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: cfg.defaultBgId, titleState: coverTitleStateByType(cfg) });
       } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null }); }
       break;
     }
     case 'coverSaveTitleState': {
       try {
         const cfg = loadCoverConfig();
-        cfg.titleState = { x: Number(msg.x)||50, y: Number(msg.y)||50, fontSize: Number(msg.fontSize)||78, width: Number(msg.width)||70 };
+        const type = msg.type || 'xhs';
+        // 归一化：旧版 titleState 是平面对象，视为 xhs 的排版
+        const byType = (cfg.titleState && !cfg.titleState.xhs && !cfg.titleState['wx-head'] && !cfg.titleState['wx-thumb'])
+          ? { xhs: cfg.titleState }
+          : (cfg.titleState || {});
+        byType[type] = { x: Number(msg.x)||50, y: Number(msg.y)||50, fontSize: Number(msg.fontSize)||78, width: Number(msg.width)||70 };
+        cfg.titleState = byType;
         saveCoverConfig(cfg);
-        panel.webview.postMessage({ type:'coverTitleStateSaved', titleState: cfg.titleState });
+        panel.webview.postMessage({ type:'coverTitleStateSaved', titleState: byType });
       } catch(e){ panel.webview.postMessage({ type:'coverTitleStateSaved', ok:false, message:e.message }); }
       break;
     }
@@ -1877,6 +1913,22 @@ function saveCoverConfig(cfg) {
     fs.writeFileSync(getCoverConfigPath(), JSON.stringify({ defaultBgId: cfg.defaultBgId||null, titleState: cfg.titleState||null, bgs: cfg.bgs||[] }, null, 2)+'\n','utf8');
   } catch(e){ log('保存封面配置失败: '+e.message); }
 }
+/**
+ * 归一化封面排版配置为「按类型」的映射，兼容旧版平面对象格式
+ * @returns { {xhs:object, 'wx-head':object, 'wx-thumb':object} }
+ */
+function coverTitleStateByType(cfg) {
+  const ts = cfg.titleState || {};
+  const byType = {};
+  byType.xhs       = (ts.xhs       && ts.xhs.x !== undefined)       ? ts.xhs       : { x: 50, y: 50, fontSize: 78, width: 70 };
+  byType['wx-head'] = (ts['wx-head'] && ts['wx-head'].x !== undefined) ? ts['wx-head'] : { x: 50, y: 42, fontSize: 72, width: 62 };
+  byType['wx-thumb'] = (ts['wx-thumb'] && ts['wx-thumb'].x !== undefined) ? ts['wx-thumb'] : { x: 50, y: 50, fontSize: 56, width: 78 };
+  // 旧版平面对象（无按类型结构）时，作为 xhs 的默认排版
+  if (ts.x !== undefined && !ts.xhs) {
+    byType.xhs = { x: Number(ts.x)||50, y: Number(ts.y)||50, fontSize: Number(ts.fontSize)||78, width: Number(ts.width)||70 };
+  }
+  return byType;
+}
 function coverBgFilePath(id, ext='png') { return path.join(getCoverStoreDir(), 'bgs', `${id}.${ext}`); }
 function coverSaveBgFromDataUrl(dataUrl, nameHint) {
   ensureCoverStoreDir();
@@ -2223,6 +2275,7 @@ function sendConfig(panel) {
     appSecret: cfg.get('appSecret', ''),
     author: cfg.get('author', ''),
     digest: cfg.get('digest', ''),
+    previewContentWidth: cfg.get('preview.contentWidth', 'medium'),
   });
 }
 

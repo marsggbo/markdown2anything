@@ -249,6 +249,12 @@
       padding: 32px 28px;
       min-height: 200px;
     }
+    /* 正文宽度档位（设置面板控制，body 类名切换）：
+       默认适中 720px；body.width-narrow/width-wide/width-full 覆盖 */
+    .article-wrapper { max-width: 720px; margin: 0 auto; }
+    body.width-narrow .article-wrapper { max-width: 560px; }
+    body.width-wide    .article-wrapper { max-width: 900px; }
+    body.width-full    .article-wrapper { max-width: none; }
 
     /* ── 侧面板通用 ── */
     .side-panel {
@@ -596,23 +602,50 @@
       color: #666;
       background: #fafafa;
     }
+    /* 表格智能自适应：
+       - table-layout:auto + width:max-content —— 窄表收缩到内容宽度并居中显示，
+         不再被 width:100% 强行拉满整行（解决"表格被拉得很宽"）
+       - 单元格 word-break 保证长 URL/连续字符自动折行，不把整行撑成巨高（解决"某行很高"）
+       - 表头 nowrap 不换行，行高更整齐
+       宽表超宽时由 .table-wrapper 内部横向滚动 */
     .article-wrapper table {
       border-collapse: collapse;
-      width: 100%;
-      margin: 1em 0;
+      width: max-content;
+      max-width: 100%;
+      margin: 1em auto;
+      table-layout: auto;
+      font-size: 0.96em;
+      line-height: 1.6;
     }
     .article-wrapper table td,
     .article-wrapper table th {
       border: 1px solid #999;
-      padding: 8px;
+      padding: 9px 14px;
+      vertical-align: middle;
+      word-break: break-word;
+      overflow-wrap: break-word;
+      text-align: left;
     }
-    .article-wrapper table th { background: #f2f2f2; font-weight: bold; text-align: center; }
+    .article-wrapper table th {
+      background: #f2f2f2;
+      font-weight: 600;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .article-wrapper table tbody tr:nth-child(even) { background: rgba(128,128,128,0.06); }
+    .article-wrapper table tbody tr:hover { background: rgba(0,120,212,0.08); }
+    /* 长表格单元格：给"内容特别多的列"一个合理的最大宽度，
+       避免单列被塞满导致行过高（典型是备注/描述列） */
+    .article-wrapper table td {
+      max-width: 480px;
+    }
     /* 宽表格滚动容器：内部横向滚动，避免宽表格把整个预览页撑宽
        （renderMarkdown 会把每个 <table> 包进 .table-wrapper）
        默认「横向滚动」模式；工具栏按钮可切换到「完整显示」（body.tables-expanded） */
     .article-wrapper .table-wrapper {
       overflow-x: auto;
       -webkit-overflow-scrolling: touch;
+      text-align: center;
     }
     /* 完整显示模式：宽表格自然展开，预览区出现横向滚动条以看全表（仅影响预览，不改变导出的 HTML） */
     body.tables-expanded .article-wrapper .table-wrapper {
@@ -1028,6 +1061,13 @@
             <span class="item-desc">覆盖预览 / 导出的 CSS</span>
           </span>
         </button>
+        <button class="dropdown-item" id="btn-settings">
+          <span class="item-icon">⚙️</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">设置</span>
+            <span class="item-desc">正文宽度 / 表格显示 / 预览选项</span>
+          </span>
+        </button>
         <button class="dropdown-item" id="btn-cover">
           <span class="item-icon">🖼️</span>
           <span class="dropdown-item-content">
@@ -1140,6 +1180,49 @@
           <button class="btn btn-primary" id="btn-apply-css">应用</button>
           <button class="btn btn-secondary" id="btn-reset-css">重置</button>
         </div>
+      </div>
+    </div>
+
+    <!-- ⚙️ 设置面板 -->
+    <div class="side-panel" id="settings-panel">
+      <div class="resize-handle" id="settings-resize-handle" title="按住左右拖动调整面板宽度"></div>
+      <div class="side-panel-header">⚙️ 设置<button class="panel-close-btn" data-close-panel="settings-panel" data-close-state="settingsPanelOpen">×</button></div>
+      <div class="side-panel-body">
+
+        <div class="section-block">
+          <div class="section-block-title">📐 正文宽度</div>
+          <p class="hint" style="margin-top:2px;color:#999;">控制预览正文的显示宽度。太宽时文字满屏、阅读费劲；太窄则图片/表格被压缩。</p>
+          <label>正文宽度</label>
+          <select id="setting-content-width" style="width:100%;box-sizing:border-box;padding:6px;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:4px;">
+            <option value="narrow">窄（约 560px，适合长文阅读）</option>
+            <option value="medium" selected>适中（约 720px，推荐）</option>
+            <option value="wide">宽（约 900px，适合表格/多图）</option>
+            <option value="full">全宽（铺满预览区，不设上限）</option>
+          </select>
+          <p class="hint" style="margin-top:6px;color:#999;">选择即生效，自动记忆为默认值。</p>
+
+          <label style="margin-top:12px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="setting-width-current-only" style="width:auto;">
+            <span>仅对当前页面生效（不写入全局默认）</span>
+          </label>
+          <p class="hint" style="margin-top:4px;color:#999;">勾选后本次调整只影响当前预览；不勾选则同时更新全局默认值，之后所有文件都用它。</p>
+        </div>
+
+        <div class="section-block">
+          <div class="section-block-title">📋 表格显示</div>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="setting-table-expand" style="width:auto;">
+            <span>宽表格完整显示（出现横向滚动条看全表）</span>
+          </label>
+          <p class="hint" style="margin-top:4px;color:#999;">不勾选时宽表格在正文宽度内横向滚动，不撑宽整页排版。</p>
+        </div>
+
+        <div class="section-block">
+          <div class="section-block-title">🎨 自定义样式</div>
+          <p class="hint" style="color:#999;">需要覆盖主题的 CSS（标题颜色、行距、表格边框等）？</p>
+          <button class="btn btn-secondary" id="btn-settings-open-style" style="width:100%;margin-top:8px;">打开「自定义样式」面板</button>
+        </div>
+
       </div>
     </div>
 
@@ -1417,6 +1500,18 @@
       <div class="resize-handle" id="cover-resize-handle"></div>
       <div class="side-panel-header">🖼️ 生成封面<button class="panel-close-btn" data-close-panel="cover-panel" data-close-state="coverPanelOpen">×</button></div>
       <div class="side-panel-body">
+
+        <!-- 封面类型 -->
+        <div class="section-block">
+          <div class="section-block-title">📐 封面类型</div>
+          <label style="margin-top:0;">选择要生成的封面规格</label>
+          <select id="cover-type" style="width:100%;box-sizing:border-box;padding:6px;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:4px;">
+            <option value="xhs">小红书封面（1080×1440 竖版 3:4）</option>
+            <option value="wx-head">微信首图（1080×460 横屏约 2.35:1）</option>
+            <option value="wx-thumb">微信缩略图（900×900 方形 1:1）</option>
+          </select>
+          <p class="hint" style="margin-top:6px;color:#999;">切换后预览与导出尺寸自动联动；标题位置/字号按百分比缩放，各类型可分别记忆排版。</p>
+        </div>
 
         <!-- 标题 + 可视化拖拽 -->
         <div class="section-block">
@@ -1898,7 +1993,7 @@
     let currentBodyHtml = '';
     let currentThemeBg = '#ffffff';
     // 用对象统一管理面板开关状态，避免 let 变量与 window 属性不同步的 bug
-    const panelState = { stylePanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false, twitterPanelOpen: false, pptPanelOpen: false, wordPanelOpen: false, llmConfigPanelOpen: false, coverPanelOpen: false };
+    const panelState = { stylePanelOpen: false, settingsPanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false, twitterPanelOpen: false, pptPanelOpen: false, wordPanelOpen: false, llmConfigPanelOpen: false, coverPanelOpen: false };
 
     // 系统出厂默认值（恢复出厂用）
     const XHS_DEFAULTS          = { width: 1080, height: 1440, padding: 40, tolerance: 15, density: 100 };
@@ -2257,6 +2352,7 @@
         { panelId: 'twitter-panel',     handleId: 'twitter-resize-handle',     defaultW: 480, minW: 340 },
         { panelId: 'ppt-panel',         handleId: 'ppt-resize-handle',         defaultW: 480, minW: 340 },
         { panelId: 'style-panel',       handleId: 'style-resize-handle',       defaultW: 340, minW: 280 },
+        { panelId: 'settings-panel',    handleId: 'settings-resize-handle',    defaultW: 340, minW: 280 },
         { panelId: 'llm-config-panel',  handleId: 'llm-resize-handle',         defaultW: 340, minW: 280 },
       ];
       PANELS.forEach(function(cfg) {
@@ -2494,7 +2590,7 @@
       if (el) el.addEventListener('click', e => e.stopPropagation());
     });
     // 「更多」菜单项点击后关闭菜单（它们打开的是侧边面板）
-    ['btn-llm-config', 'btn-style', 'btn-cover'].forEach(id => {
+    ['btn-llm-config', 'btn-style', 'btn-cover', 'btn-settings'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('click', () => closeAllDropdowns());
     });
@@ -2604,7 +2700,7 @@
     }
 
     const _allPanels = [
-      {panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},
+      {panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'settings-panel',stateKey:'settingsPanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},
       {panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},
       {panelId:'twitter-panel',stateKey:'twitterPanelOpen'},{panelId:'ppt-panel',stateKey:'pptPanelOpen'},
       {panelId:'word-panel',stateKey:'wordPanelOpen'},{panelId:'llm-config-panel',stateKey:'llmConfigPanelOpen'},
@@ -2650,6 +2746,13 @@
       if (!wasOpen) {
         const t = document.getElementById('cover-title');
         if (t && !t.value && currentTitle) t.value = currentTitle;
+      }
+      // 初始化封面类型（预览框尺寸按当前类型设置）
+      if (typeof coverSwitchType === 'function') {
+        const sel = document.getElementById('cover-type');
+        const initType = sel && sel.value ? sel.value : 'xhs';
+        _coverType = initType;
+        coverSwitchType(initType);
       }
     });
 
@@ -2775,10 +2878,34 @@
     });
 
     // ─── 封面：拖拽/缩放/历史 + LLM ───
+    const COVER_TYPES = {
+      xhs:       { w: 1080, h: 1440, label: '小红书' },
+      'wx-head': { w: 1080, h: 460,  label: '微信首图' },
+      'wx-thumb':{ w: 900,  h: 900,  label: '微信缩略图' },
+    };
     let _coverBgDataUrl = '';
     let _coverLastPrompt = '';
     let _coverTitleState = { x:50, y:50, fontSize:78, width:70 };
+    let _coverType = 'xhs';           // 当前封面类型
     let _coverBgHistory = [];
+    // 各类型排版状态（按类型记忆），_coverTitleState 始终指向当前类型
+    const _coverTitleStateByType = {};
+    // 预览框固定显示宽度（px），高度按比例算；避免切换类型时预览框忽大忽小
+    const COVER_PREVIEW_W = 240;
+    function coverGetCurrentType(){ return _coverType; }
+    function coverSwitchType(type){
+      _coverType = COVER_TYPES[type] ? type : 'xhs';
+      // 保存当前类型排版 → 切换到新类型的排版
+      _coverTitleStateByType[_coverType] = Object.assign({}, _coverTitleState);
+      _coverTitleState = _coverTitleStateByType[type] ? Object.assign({}, _coverTitleStateByType[type]) : { x:50, y:50, fontSize:78, width:70 };
+      // 更新预览框尺寸
+      const ct = COVER_TYPES[_coverType];
+      const wrap = document.getElementById('cover-preview-wrap');
+      const inner = document.getElementById('cover-preview-inner');
+      if (wrap) { wrap.style.width = COVER_PREVIEW_W + 'px'; wrap.style.height = Math.round(COVER_PREVIEW_W * ct.h / ct.w) + 'px'; }
+      if (inner) { inner.style.width = ct.w + 'px'; inner.style.height = ct.h + 'px'; const s = COVER_PREVIEW_W / ct.w; inner.style.transform = 'scale(' + s + ')'; }
+      coverApplyPreview();
+    }
     function coverApplyPreview(){
       const title=(document.getElementById('cover-title')||{}).value||currentTitle||'标题预览';
       const tagline=(document.getElementById('cover-tagline')||{}).value||'';
@@ -2903,13 +3030,39 @@
       if(fs) fs.addEventListener('input', function(){ _coverTitleState.fontSize=parseInt(fs.value,10)||78; coverApplyPreview(); });
       if(w) w.addEventListener('input', function(){ _coverTitleState.width=parseInt(w.value,10)||70; coverApplyPreview(); });
       const reset=document.getElementById('btn-cover-reset-pos');
-      if(reset) reset.addEventListener('click', function(){ _coverTitleState={x:50,y:50,fontSize:78,width:70}; coverApplyPreview(); });
+      if(reset) reset.addEventListener('click', function(){
+        const defs = { xhs: {x:50,y:50,fontSize:78,width:70}, 'wx-head': {x:50,y:42,fontSize:72,width:62}, 'wx-thumb': {x:50,y:50,fontSize:56,width:78} };
+        _coverTitleState = Object.assign({}, defs[_coverType] || defs.xhs);
+        coverApplyPreview();
+      });
       const confirmBtn=document.getElementById('btn-cover-confirm');
       if(confirmBtn) confirmBtn.addEventListener('click', function(){
-        vscode.postMessage({ type:'coverSaveTitleState', x:_coverTitleState.x, y:_coverTitleState.y, fontSize:_coverTitleState.fontSize, width:_coverTitleState.width });
+        vscode.postMessage({ type:'coverSaveTitleState', type:_coverType, x:_coverTitleState.x, y:_coverTitleState.y, fontSize:_coverTitleState.fontSize, width:_coverTitleState.width });
         showToast('✅ 排版已确认，将作为以后默认值','success');
         confirmBtn.textContent='✓ 已确认';
         setTimeout(function(){ confirmBtn.textContent='✓ 确认排版'; }, 1500);
+
+        // 同步到本地按类型缓存，切换类型后回来仍保留
+        _coverTitleStateByType[_coverType] = Object.assign({}, _coverTitleState);
+      });
+      // 封面类型切换
+      const typeSel=document.getElementById('cover-type');
+      if(typeSel) typeSel.addEventListener('change', function(){
+        const t = typeSel.value;
+        if (t === _coverType) return;
+        // 保存当前类型排版
+        _coverTitleStateByType[_coverType] = Object.assign({}, _coverTitleState);
+        // 切换到新类型
+        _coverType = COVER_TYPES[t] ? t : 'xhs';
+        _coverTitleState = _coverTitleStateByType[_coverType] ? Object.assign({}, _coverTitleStateByType[_coverType]) : {x:50,y:50,fontSize:78,width:70};
+        // 更新预览框尺寸
+        const ct = COVER_TYPES[_coverType];
+        const wrap=document.getElementById('cover-preview-wrap');
+        const inner=document.getElementById('cover-preview-inner');
+        if(wrap){ wrap.style.width=COVER_PREVIEW_W+'px'; wrap.style.height=Math.round(COVER_PREVIEW_W*ct.h/ct.w)+'px'; }
+        if(inner){ inner.style.width=ct.w+'px'; inner.style.height=ct.h+'px'; const s=COVER_PREVIEW_W/ct.w; inner.style.transform='scale('+s+')'; }
+        coverApplyPreview();
+        showToast('已切换为「'+ct.label+'」封面 ('+ct.w+'×'+ct.h+')','',1500);
       });
     })();
     // 背景上传：自动设为默认并入历史
@@ -2950,7 +3103,8 @@
       document.getElementById('cover-progress').textContent='⏳ 正在合成封面...';
       const tagline=(document.getElementById('cover-tagline')||{}).value||'';
       let bg=_coverBgDataUrl|| (document.getElementById('cover-bg')||{}).value||'';
-      vscode.postMessage({ type:'coverGenerate', title:title, tagline:tagline, bgDataUrl:bg, titleState:_coverTitleState });
+      const ct = COVER_TYPES[_coverType] || COVER_TYPES.xhs;
+      vscode.postMessage({ type:'coverGenerate', title:title, tagline:tagline, bgDataUrl:bg, titleState:_coverTitleState, type:_coverType, width:ct.w, height:ct.h });
     });
     document.getElementById('btn-cover-copy').addEventListener('click', async function(){
       const img=document.getElementById('cover-result-img');
@@ -3209,8 +3363,59 @@
 
     document.getElementById('btn-style').addEventListener('click', () => {
       togglePanel('style-panel', 'stylePanelOpen',
-        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'}]);
+        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'settings-panel',stateKey:'settingsPanelOpen'}]);
     });
+
+    // ─── 设置面板 ───
+    document.getElementById('btn-settings').addEventListener('click', () => {
+      togglePanel('settings-panel', 'settingsPanelOpen',
+        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'style-panel',stateKey:'stylePanelOpen'}]);
+    });
+
+    // 打开自定义样式面板（从设置面板跳转）
+    document.getElementById('btn-settings-open-style').addEventListener('click', () => {
+      closeAllDropdowns();
+      togglePanel('style-panel', 'stylePanelOpen',
+        [{panelId:'settings-panel',stateKey:'settingsPanelOpen'}]);
+    });
+
+    // 正文宽度：读取已保存值并应用
+    const widthSel = document.getElementById('setting-content-width');
+    const widthCurrentOnly = document.getElementById('setting-width-current-only');
+    let savedWidth = 'medium';
+    try {
+      const st = (typeof vscode !== 'undefined' && vscode.getState) ? vscode.getState() : null;
+      if (st && st.contentWidth) savedWidth = st.contentWidth;
+    } catch (_) {}
+    // 初始化控件与 body 类
+    function applyContentWidth(w, remember) {
+      savedWidth = w || 'medium';
+      document.body.classList.remove('width-narrow', 'width-medium', 'width-wide', 'width-full');
+      document.body.classList.add('width-' + savedWidth);
+      if (widthSel) widthSel.value = savedWidth;
+      if (remember !== false) {
+        try {
+          const st = (typeof vscode !== 'undefined' && vscode.setState) ? (vscode.getState() || {}) : {};
+          st.contentWidth = savedWidth;
+          if (vscode.setState) vscode.setState(st);
+        } catch (_) {}
+        vscode.postMessage({ type: 'savePreviewSetting', key: 'contentWidth', value: savedWidth });
+      }
+    }
+    if (widthSel) widthSel.addEventListener('change', () => {
+      const currentOnly = widthCurrentOnly && widthCurrentOnly.checked;
+      applyContentWidth(widthSel.value, !currentOnly);
+      showToast(currentOnly ? '已应用（仅当前页面）' : '已应用并设为全局默认', 'success');
+    });
+    if (widthCurrentOnly) widthCurrentOnly.addEventListener('change', () => {
+      // 切换"仅当前页面"后立即按新语义保存一次
+      const currentOnly = widthCurrentOnly.checked;
+      applyContentWidth(savedWidth, !currentOnly);
+      showToast(currentOnly ? '后续调整仅当前页面生效' : '后续调整会写入全局默认', 'success');
+    });
+    applyContentWidth(savedWidth, false);
+
+    // ───（表格展开设置联动见 applyTableMode 定义处）───
 
     // 应用自定义 CSS
     document.getElementById('btn-apply-css').addEventListener('click', () => {
@@ -3380,21 +3585,39 @@
           btn.disabled = false;
           const _zl = btn.querySelector('.item-label'); if (_zl) _zl.textContent = '复制到剪贴板';
           const html = msg.html || '';
-          // 图片处理结果提示：已自动上传 → 正常；有图但未登录/未上传 → 提醒登录
+          // 图片处理结果提示
           const _imgNote = (() => {
             const n = msg.imgCount || 0;
             if (n === 0) return '';
-            if ((msg.imgUploaded || 0) > 0) return `（${msg.imgUploaded}/${n} 张图片已自动上传到知乎图床）`;
-            if (!msg.loggedIn) return '⚠️ 含图片但未登录知乎，粘贴后图片可能无法显示，请先在知乎面板扫码登录';
-            return '⚠️ 图片上传失败，粘贴后可能无法显示，请手动上传';
+            const uploaded = msg.imgUploaded || 0;
+            const reused = msg.imgReused || 0;
+            if (uploaded > 0 && reused > 0) return `（图片已就绪：新传 ${uploaded - reused} 张 + 复用缓存 ${reused} 张）`;
+            if (uploaded > 0) return `（${uploaded}/${n} 张图片已上传到知乎图床，粘贴即可显示）`;
+            if (!msg.loggedIn) return '⚠️ 含图片但未登录知乎，图片将无法显示';
+            return '⚠️ 图片上传失败，粘贴后可能无法显示';
           })();
+          // 未登录且有图片 → 复制后弹窗引导登录
+          const _needLogin = (msg.imgCount || 0) > 0 && !msg.loggedIn;
           const doCopy = () => {
+            const finishToast = () => {
+              showToast('✅ 已复制！粘贴到知乎编辑器即可' + (_imgNote ? '\n' + _imgNote : ''), 'success', 4000);
+              if (_needLogin) {
+                // 引导登录：打开知乎发布面板的登录区
+                setTimeout(() => {
+                  const ok = confirm('检测到图片但未登录知乎。\n\n文字和公式已复制，可以直接粘贴；\n但图片需要登录后才能自动上传到知乎图床。\n\n现在去登录知乎吗？');
+                  if (ok) {
+                    // 打开知乎发布面板（含扫码登录入口）
+                    const pubBtn = document.getElementById('btn-zhihu-publish');
+                    if (pubBtn) pubBtn.click();
+                  }
+                }, 300);
+              }
+            };
             if (navigator.clipboard && window.ClipboardItem) {
               navigator.clipboard.write([new ClipboardItem({
                 'text/html':  new Blob([html], {type:'text/html'}),
                 'text/plain': new Blob([document.getElementById('preview-content').innerText||''], {type:'text/plain'}),
-              })]).then(()=>showToast('✅ 已复制！粘贴到知乎编辑器即可' + _imgNote,'success'))
-                 .catch(fallback);
+              })]).then(finishToast).catch(fallback);
             } else { fallback(); }
             function fallback() {
               const tmp = document.createElement('div');
@@ -3405,7 +3628,7 @@
               const range = document.createRange();
               range.selectNodeContents(tmp);
               sel.removeAllRanges(); sel.addRange(range);
-              try { document.execCommand('copy'); showToast('✅ 已复制！粘贴到知乎编辑器即可' + _imgNote,'success'); }
+              try { document.execCommand('copy'); finishToast(); }
               catch(_) { showToast('复制失败，请手动选择复制','error'); }
               sel.removeAllRanges(); document.body.removeChild(tmp);
             }
@@ -3506,6 +3729,13 @@
           if (msg.appSecret) document.getElementById('input-appsecret').value = msg.appSecret;
           if (msg.author)    document.getElementById('input-author').value    = msg.author;
           if (msg.digest)    document.getElementById('input-digest').value    = msg.digest;
+          // 应用全局默认正文宽度（仅当本页面没有更高优先级的已选值）
+          if (msg.previewContentWidth && typeof applyContentWidth === 'function') {
+            try {
+              const st = (typeof vscode !== 'undefined' && vscode.getState) ? vscode.getState() : null;
+              if (!st || !st.contentWidth) applyContentWidth(msg.previewContentWidth, false);
+            } catch (_) {}
+          }
           break;
         }
         case 'configSaved': {
@@ -3861,7 +4091,17 @@
         }
         case 'coverHistory': {
           _coverBgHistory = msg.bgs || [];
-          if(msg.titleState){ _coverTitleState = { x: msg.titleState.x||50, y: msg.titleState.y||50, fontSize: msg.titleState.fontSize||78, width: msg.titleState.width||70 }; }
+          if(msg.titleState){
+            // 新版：按类型映射 { xhs:{...}, 'wx-head':{...}, 'wx-thumb':{...} }；旧版：平面对象
+            const ts = msg.titleState;
+            const byType = (ts.xhs || ts['wx-head'] || ts['wx-thumb'])
+              ? ts
+              : { xhs: ts };   // 兼容旧版平面对象
+            ['xhs','wx-head','wx-thumb'].forEach(function(t){
+              if(byType[t] && byType[t].x !== undefined) _coverTitleStateByType[t] = Object.assign({}, byType[t]);
+            });
+            _coverTitleState = Object.assign({}, (_coverTitleStateByType[_coverType] || byType.xhs || {x:50,y:50,fontSize:78,width:70}));
+          }
           // 自动选中默认底图
           const def = _coverBgHistory.find(function(b){return b.id===msg.defaultBgId;}) || _coverBgHistory[0];
           if(def && !_coverBgDataUrl){
@@ -3986,6 +4226,18 @@
       });
     }
     applyTableMode();
+
+    // ─── 设置面板：表格展开开关 ↔ 工具栏按钮双向联动 ───
+    const tableExpandChk = document.getElementById('setting-table-expand');
+    if (tableExpandChk) {
+      tableExpandChk.checked = !!tablesExpanded;
+      tableExpandChk.addEventListener('change', () => {
+        tablesExpanded = tableExpandChk.checked;
+        if (vscode.setState) vscode.setState({ tablesExpanded });
+        applyTableMode();
+        showToast(tablesExpanded ? '宽表格完整显示' : '宽表格横向滚动', 'success');
+      });
+    }
 
     // ─── 双向同步：编辑器 ↔ 预览（纯手动，不自动触发）───
     // data-source-line 已在渲染时注入到每个标题元素，无需手动配对
