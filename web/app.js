@@ -362,61 +362,124 @@ def summarize(md):
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  // ── 小红书长图导出（多张子图，适配移动端 1080×1440）──
+  // ── 小红书长图导出（分块渲染 + 拼接，质量可靠；支持单张长图 / 多张子图）──
   const XHS_W = 1080, XHS_H = 1440;
-  async function exportXhs() {
-    const theme = M2A.getTheme(currentThemeId);
-    const scale = 2;
-    showToast('⏳ 正在生成长图…');
+  const XHS_SCALE = 2;
+  const CHUNK_H = 1300;   // 每块逻辑高（html2canvas 分块渲染可靠，避免大 canvas 丢失）
+  const CHUNK_OVERLAP = 120;
+
+  /**
+   * 分块渲染预览为完整大 canvas。
+   * html2canvas 整页大高度会丢失内容，分块（每块 ~1300 逻辑高，重叠拼接）保证质量。
+   */
+  async function renderFullCanvas(theme, scale, logicalWidth) {
+    const zoomCanvas = document.querySelector('.zoom-canvas');
+    const prevMaxW = zoomCanvas.style.maxWidth;
+    const articleWrapper = previewContent.parentElement;
+    const prevWrapPad = articleWrapper.style.padding;
+    const prevMinH = articleWrapper.style.minHeight;
+    // 固定宽度 + 小红书舒适留白 + 去掉 min-height 干扰（避免偏移错位）
+    zoomCanvas.style.maxWidth = logicalWidth + 'px';
+    articleWrapper.style.padding = '40px 48px';
+    articleWrapper.style.minHeight = '0';
+    previewScroll.scrollTop = 0;
+    await new Promise((r) => setTimeout(r, 120));
+
+    // 精确总高：内容自身高度（含 padding）
+    const totalH = Math.max(1, Math.ceil(previewContent.getBoundingClientRect().height));
+    const physW = logicalWidth * scale;
+    const out = document.createElement('canvas');
+    out.width = physW;
+    out.height = Math.max(1, totalH * scale);
+    const octx = out.getContext('2d');
+    octx.fillStyle = theme.wrapperBg || '#ffffff';
+    octx.fillRect(0, 0, out.width, out.height);
+
     try {
-      // 临时把预览区固定为 1080 宽，确保截图比例正确（截完恢复）
-      const zoomCanvas = document.querySelector('.zoom-canvas');
-      const prevMaxW = zoomCanvas.style.maxWidth;
-      const articleWrapper = previewContent.parentElement;
-      const prevWrapPad = articleWrapper.style.padding;
-      zoomCanvas.style.maxWidth = XHS_W + 'px';
-      articleWrapper.style.padding = '40px 48px';   // 小红书舒适留白
-      await new Promise((r) => setTimeout(r, 50));
-      // 1. 截完整预览为一张大 canvas（逻辑 1080 宽 → 物理 2160）
-      const fullCanvas = await html2canvas(previewContent, {
-        scale, backgroundColor: theme.wrapperBg || '#ffffff', useCORS: true, logging: false,
-        width: XHS_W,
-        windowWidth: XHS_W,
-      });
-      // 恢复预览宽度
+      let y = 0;
+      let guard = 0;
+      while (y < totalH && guard < 400) {
+        guard++;
+        const chunkLogicalH = Math.min(CHUNK_H, totalH - y);
+        const chunkCanvas = await html2canvas(previewContent, {
+          scale,
+          backgroundColor: theme.wrapperBg || '#ffffff',
+          useCORS: true,
+          logging: false,
+          width: logicalWidth,
+          windowWidth: logicalWidth,
+          height: Math.min(chunkLogicalH + CHUNK_OVERLAP, totalH - y),
+          y,
+          x: 0,
+        });
+        const pasteH = Math.min(chunkLogicalH * scale, chunkCanvas.height);
+        octx.drawImage(chunkCanvas, 0, 0, chunkCanvas.width, pasteH, 0, y * scale, physW, pasteH);
+        y += chunkLogicalH;
+        await new Promise((r) => setTimeout(r, 30));
+      }
+    } finally {
       zoomCanvas.style.maxWidth = prevMaxW;
       articleWrapper.style.padding = prevWrapPad;
-      const fullW = fullCanvas.width;          // 物理宽
-      const fullH = fullCanvas.height;         // 物理高
-      const physW = XHS_W * scale;             // 2160
-      const physH = XHS_H * scale;             // 2880
+      articleWrapper.style.minHeight = prevMinH;
+    }
+    // 裁剪到实际高度
+    const finalH = Math.min(totalH * scale, out.height);
+    const cropped = document.createElement('canvas');
+    cropped.width = physW;
+    cropped.height = finalH;
+    cropped.getContext('2d').drawImage(out, 0, 0, physW, finalH, 0, 0, physW, finalH);
+    return cropped;
+  }
 
-      // 2. 计算切片点：收集块级元素物理 Y 坐标作为候选边界
-      const cutPoints = computeCutPoints(physW, physH, scale, fullH);
-
-      // 3. 逐段 drawImage 切片导出
+  /** 导出完整单张长图 */
+  async function exportXhsSingle() {
+    const theme = M2A.getTheme(currentThemeId);
+    showToast('⏳ 正在生成完整长图…');
+    try {
+      const canvas = await renderFullCanvas(theme, XHS_SCALE, XHS_W);
       const title = (currentTitle || 'markdown').replace(/[\\/:*?"<>|]/g, '');
-      const downloads = [];
+      await downloadCanvas(canvas, `${title}-长图.png`);
+      showToast('✅ 完整长图已导出', 'success');
+    } catch (e) {
+      console.error(e);
+      showToast('导出失败：' + e.message, 'error');
+    }
+  }
+
+  /** 导出多张 1080×1440 子图（移动端适配） */
+  async function exportXhsMulti() {
+    const theme = M2A.getTheme(currentThemeId);
+    showToast('⏳ 正在生成多张子图…');
+    try {
+      const canvas = await renderFullCanvas(theme, XHS_SCALE, XHS_W);
+      const fullW = canvas.width;       // 物理宽 2160
+      const fullH = canvas.height;
+      const physW = XHS_W * XHS_SCALE;  // 2160
+      const physH = XHS_H * XHS_SCALE;  // 2880
+      const cutPoints = computeCutPoints(physW, physH, XHS_SCALE, fullH);
+      const title = (currentTitle || 'markdown').replace(/[\\/:*?"<>|]/g, '');
       for (let i = 0; i < cutPoints.length; i++) {
         const [y0, y1] = cutPoints[i];
         const h = y1 - y0;
         const slice = document.createElement('canvas');
         slice.width = physW;
-        slice.height = physH;                  // 每张固定 1440 逻辑高
+        slice.height = physH;
         const ctx = slice.getContext('2d');
         ctx.fillStyle = theme.wrapperBg || '#ffffff';
         ctx.fillRect(0, 0, physW, physH);
-        // 底部填充背景，避免最后一张矮
-        ctx.drawImage(fullCanvas, 0, y0, physW, h, 0, 0, physW, h);
-        // 直接下载
+        ctx.drawImage(canvas, 0, y0, physW, h, 0, 0, physW, h);
         await downloadCanvas(slice, `${title}-${String(i + 1).padStart(2, '0')}.png`);
-        downloads.push(`${title}-${String(i + 1).padStart(2, '0')}.png`);
       }
-      showToast(`✅ 已导出 ${downloads.length} 张子图（1080×1440）`, 'success');
+      showToast(`✅ 已导出 ${cutPoints.length} 张子图（1080×1440）`, 'success');
     } catch (e) {
       console.error(e);
       showToast('导出失败：' + e.message, 'error');
     }
+  }
+
+  async function exportXhs() {
+    // 保持兼容旧调用，默认导出完整单张长图（用户更满意）
+    return exportXhsSingle();
   }
 
   // 计算切片点：每张目标 physH，向上找最近块级元素边界
@@ -623,6 +686,7 @@ def summarize(md):
     $('btn-copy-wechat').addEventListener('click', () => copyHtml('wechat'));
     $('btn-copy-zhihu').addEventListener('click', () => copyHtml('zhihu'));
     $('btn-export-xhs').addEventListener('click', exportXhs);
+    $('btn-export-xhs-multi').addEventListener('click', exportXhsMulti);
     // 粘贴事件：编辑器内粘贴图片直接插入
     document.addEventListener('paste', (e) => {
       const items = e.clipboardData && e.clipboardData.items;
