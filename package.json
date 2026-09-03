@@ -240,7 +240,9 @@
     "test": "node test/run.js",
     "test:syntax": "node test/run.js syntax",
     "test:ui": "node test/run.js ui",
-    "release": "node scripts/release.js"
+    "release": "node scripts/release.js",
+    "electron:dist": "bash web/build.sh && electron-builder --mac --x64",
+    "electron:dist:arm64": "bash web/build.sh && electron-builder --mac --arm64"
   },
   "devDependencies": {
     "@codemirror/commands": "^6.11.0",
@@ -251,7 +253,7 @@
     "@codemirror/view": "^6.43.10",
     "@vscode/vsce": "^3.9.2",
     "codemirror": "^6.0.2",
-    "electron": "^30.0.0",
+    "electron": "^30.5.1",
     "electron-builder": "^24.13.3",
     "esbuild": "^0.28.2"
   }

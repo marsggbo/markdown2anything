@@ -277,6 +277,7 @@ def summarize(md):
   }
 
   // ── 文件打开 / 下载 / 清空 ──
+  const isElectron = typeof window.electronAPI !== 'undefined';
   function initFiles() {
     $('btn-new').addEventListener('click', () => {
       if (!confirm('清空当前内容？')) return;
@@ -284,7 +285,18 @@ def summarize(md):
       localStorage.removeItem(LS_KEY);
       showToast('已清空', 'success');
     });
-    $('btn-open').addEventListener('click', () => {
+    $('btn-open').addEventListener('click', async () => {
+      if (isElectron) {
+        // Electron：本地文件对话框
+        try {
+          const res = await window.electronAPI.invoke('dialog:openFile');
+          if (res && res.content !== undefined) {
+            editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: String(res.content) } });
+            showToast(`✅ 已打开 ${res.fileName}`, 'success');
+          }
+        } catch (e) { showToast('打开失败：' + e.message, 'error'); }
+        return;
+      }
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = '.md,.markdown,.txt';
@@ -302,6 +314,12 @@ def summarize(md):
     });
     $('btn-download').addEventListener('click', () => {
       const text = editor.state.doc.toString();
+      if (isElectron) {
+        window.electronAPI.invoke('dialog:saveFileAs', text)
+          .then((res) => { if (res) showToast(`✅ 已保存 ${res.fileName}`, 'success'); })
+          .catch((e) => showToast('保存失败：' + e.message, 'error'));
+        return;
+      }
       const a = document.createElement('a');
       a.download = (currentTitle || 'markdown') + '.md';
       a.href = URL.createObjectURL(new Blob([text], { type: 'text/markdown' }));

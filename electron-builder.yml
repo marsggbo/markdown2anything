@@ -1,5 +1,5 @@
-appId: com.marsggbo.md2wechat
-productName: MD2WeChat
+appId: com.marsggbo.markdown2anything
+productName: Markdown2Anything
 copyright: MIT
 
 directories:
@@ -11,15 +11,27 @@ files:
   - lib/**/*
   - scripts/**/*
   - templates/**/*
+  - web/**/*
   - package.json
   - node_modules/**/*
+  - assets/**/*
 
 mac:
   target:
     - dmg
     - zip
-  # icon: icon.png
+  icon: build/icon.png
   category: public.app-category.productivity
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+linux:
+  target:
+    - AppImage
   artifactName: ${productName}-${version}-${arch}.${ext}
 
 extraMetadata:
