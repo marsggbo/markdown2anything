@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MD2WeChat - Markdown Export</title>
+  <title>Markdown2Anything</title>
 
   <!-- 外部资源已移除，避免 file:// 协议路径问题 -->
 
@@ -434,7 +434,7 @@
     <button class="btn btn-secondary" id="btn-new" title="新建空白文件">📄 新建</button>
     <button class="btn btn-secondary" id="btn-open" title="打开 Markdown 文件 (Cmd+O)">📂 打开</button>
     <button class="btn btn-secondary" id="btn-save" title="保存文件 (Cmd+S)">💾 保存</button>
-    <span class="toolbar-title" id="doc-title">MD2WeChat</span>
+    <span class="toolbar-title" id="doc-title">Markdown2Anything</span>
     <select id="theme-select" title="切换主题" style="
       padding:5px 8px; border:none; border-radius:4px; cursor:pointer;
       font-size:13px; background:#3a3a3a; color:#eee; outline:none;
@@ -860,7 +860,7 @@
       editorTextarea.value = '';
       currentFilePath = null;
       modified = false;
-      document.getElementById('doc-title').textContent = 'MD2WeChat';
+      document.getElementById('doc-title').textContent = 'Markdown2Anything';
     }
 
     document.getElementById('btn-open').addEventListener('click', openFile);
@@ -1076,7 +1076,7 @@
       const bodyHtml = msg.bodyHtml || '';
       currentTitle   = msg.title || '';
       document.getElementById('preview-content').innerHTML = bodyHtml;
-      document.getElementById('doc-title').textContent = (modified ? '● ' : '') + (currentTitle || (currentFilePath ? currentFilePath.split(/[\\/]/).pop() : 'MD2WeChat'));
+      document.getElementById('doc-title').textContent = (modified ? '● ' : '') + (currentTitle || (currentFilePath ? currentFilePath.split(/[\\/]/).pop() : 'Markdown2Anything'));
       if (msg.theme) applyTheme(msg.theme);
       const titleInput = document.getElementById('input-title');
       if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
