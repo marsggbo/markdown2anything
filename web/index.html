@@ -22,6 +22,9 @@
     .titlebar .logo { font-size: 14px; font-weight: 700; color: #f59e0b; white-space: nowrap; }
     .titlebar .logo small { font-weight: 400; color: #888; font-size: 11px; }
     .titlebar .spacer { flex: 1; }
+    .titlebar-link { display: flex; gap: 6px; font-size: 12px; }
+    .titlebar-link a { color: #aaa; text-decoration: none; padding: 3px 8px; border-radius: 4px; transition: background .15s, color .15s; }
+    .titlebar-link a:hover { color: #f59e0b; background: rgba(245,158,11,.15); }
     .btn {
       padding: 5px 12px; font-size: 12.5px; border-radius: 4px; border: 1px solid #444;
       background: #2d2d2d; color: #ddd; cursor: pointer; white-space: nowrap; transition: background .15s;
@@ -79,11 +82,24 @@
     }
     .insert-menu .mi { padding: 7px 12px; font-size: 12.5px; color: #ddd; cursor: pointer; border-radius: 4px; }
     .insert-menu .mi:hover { background: #333; }
+    /* ── 底部宣传条 ── */
+    .footer {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      padding: 5px 12px; font-size: 11.5px; color: #999; background: #f0eee9;
+      border-top: 1px solid #e2dfd8; flex-shrink: 0;
+    }
+    .footer a { color: #b45309; text-decoration: none; font-weight: 600; }
+    .footer a:hover { text-decoration: underline; }
+    .footer .dot { color: #ccc; }
   </style>
 </head>
 <body>
   <div class="titlebar">
     <span class="logo">Markdown2Anything <small>网页版 · v4.0</small></span>
+    <span class="titlebar-link">
+      <a href="https://github.com/marsggbo/markdown2anything" target="_blank" rel="noopener">⭐ GitHub</a>
+      <a href="https://github.com/marsggbo" target="_blank" rel="noopener">@marsggbo</a>
+    </span>
     <select id="theme-select" title="切换主题"></select>
     <button class="btn" id="btn-insert-img">🖼 插入图片</button>
     <button class="btn" id="btn-copy-wechat">📋 复制微信</button>
@@ -104,6 +120,15 @@
       <div class="pane-head"><span class="title" id="doc-title">预览</span></div>
       <div id="preview-scroll"><div class="zoom-canvas"><div class="article-wrapper" id="preview-content"><p style="color:#999;text-align:center;">在左侧输入 Markdown，实时预览…</p></div></div></div>
     </div>
+  </div>
+
+  <div class="footer">
+    <span>Markdown2Anything · 开源免费</span>
+    <a href="https://github.com/marsggbo/markdown2anything" target="_blank" rel="noopener">⭐ Star 支持</a>
+    <span class="dot">·</span>
+    <a href="https://github.com/marsggbo" target="_blank" rel="noopener">作者 @marsggbo</a>
+    <span class="dot">·</span>
+    <span>数据仅存本地浏览器，不上传</span>
   </div>
 
   <div class="insert-menu" id="insert-menu">

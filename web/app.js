@@ -169,10 +169,22 @@ def summarize(md):
     // 包一层 article-wrapper + 主题 CSS 内联到 style
     const full = `<style>${theme.css}</style><div class="article-wrapper" style="padding:16px;background:${theme.wrapperBg};font-family:system-ui,-apple-system,'PingFang SC',sans-serif;">${html}</div>`;
     try {
-      await navigator.clipboard.writeText(full);
-      showToast(`✅ 已复制${platform === 'wechat' ? '微信' : '知乎'}格式到剪贴板，去编辑器粘贴即可`, 'success');
+      // 关键：必须写 text/html MIME，粘贴时目标编辑器才识别为富文本而非源码
+      const plain = document.createElement('div');
+      plain.innerHTML = full;
+      const textBlob = new Blob([plain.textContent], { type: 'text/plain' });
+      const htmlBlob = new Blob([full], { type: 'text/html' });
+      const item = new ClipboardItem({ 'text/html': htmlBlob, 'text/plain': textBlob });
+      await navigator.clipboard.write([item]);
+      showToast(`✅ 已复制${platform === 'wechat' ? '微信' : '知乎'}格式，去编辑器 Ctrl+V / ⌘V 粘贴`, 'success');
     } catch (e) {
-      showToast('复制失败：' + e.message, 'error');
+      // 降级：老浏览器不支持 ClipboardItem 时退回纯文本
+      try {
+        await navigator.clipboard.writeText(full);
+        showToast(`✅ 已复制（纯文本模式），去编辑器粘贴`, 'success');
+      } catch (e2) {
+        showToast('复制失败：' + e.message, 'error');
+      }
     }
   }
 
@@ -180,22 +192,116 @@ def summarize(md):
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
-  // ── 小红书长图导出（html2canvas）──
+  // ── 小红书长图导出（多张子图，适配移动端 1080×1440）──
+  const XHS_W = 1080, XHS_H = 1440;
   async function exportXhs() {
     const theme = M2A.getTheme(currentThemeId);
+    const scale = 2;
     showToast('⏳ 正在生成长图…');
     try {
-      const canvas = await html2canvas(previewContent, {
-        scale: 2, backgroundColor: theme.wrapperBg || '#ffffff', useCORS: true, logging: false,
+      // 临时把预览区固定为 1080 宽，确保截图比例正确（截完恢复）
+      const zoomCanvas = document.querySelector('.zoom-canvas');
+      const prevMaxW = zoomCanvas.style.maxWidth;
+      const articleWrapper = previewContent.parentElement;
+      const prevWrapPad = articleWrapper.style.padding;
+      zoomCanvas.style.maxWidth = XHS_W + 'px';
+      articleWrapper.style.padding = '40px 48px';   // 小红书舒适留白
+      await new Promise((r) => setTimeout(r, 50));
+      // 1. 截完整预览为一张大 canvas（逻辑 1080 宽 → 物理 2160）
+      const fullCanvas = await html2canvas(previewContent, {
+        scale, backgroundColor: theme.wrapperBg || '#ffffff', useCORS: true, logging: false,
+        width: XHS_W,
+        windowWidth: XHS_W,
       });
-      const a = document.createElement('a');
-      a.download = (currentTitle || 'markdown') + '-长图.png';
-      a.href = canvas.toDataURL('image/png');
-      a.click();
-      showToast('✅ 长图已导出（浏览器下载）', 'success');
+      // 恢复预览宽度
+      zoomCanvas.style.maxWidth = prevMaxW;
+      articleWrapper.style.padding = prevWrapPad;
+      const fullW = fullCanvas.width;          // 物理宽
+      const fullH = fullCanvas.height;         // 物理高
+      const physW = XHS_W * scale;             // 2160
+      const physH = XHS_H * scale;             // 2880
+
+      // 2. 计算切片点：收集块级元素物理 Y 坐标作为候选边界
+      const cutPoints = computeCutPoints(physW, physH, scale, fullH);
+
+      // 3. 逐段 drawImage 切片导出
+      const title = (currentTitle || 'markdown').replace(/[\\/:*?"<>|]/g, '');
+      const downloads = [];
+      for (let i = 0; i < cutPoints.length; i++) {
+        const [y0, y1] = cutPoints[i];
+        const h = y1 - y0;
+        const slice = document.createElement('canvas');
+        slice.width = physW;
+        slice.height = physH;                  // 每张固定 1440 逻辑高
+        const ctx = slice.getContext('2d');
+        ctx.fillStyle = theme.wrapperBg || '#ffffff';
+        ctx.fillRect(0, 0, physW, physH);
+        // 底部填充背景，避免最后一张矮
+        ctx.drawImage(fullCanvas, 0, y0, physW, h, 0, 0, physW, h);
+        // 直接下载
+        await downloadCanvas(slice, `${title}-${String(i + 1).padStart(2, '0')}.png`);
+        downloads.push(`${title}-${String(i + 1).padStart(2, '0')}.png`);
+      }
+      showToast(`✅ 已导出 ${downloads.length} 张子图（1080×1440）`, 'success');
     } catch (e) {
+      console.error(e);
       showToast('导出失败：' + e.message, 'error');
     }
+  }
+
+  // 计算切片点：每张目标 physH，向上找最近块级元素边界
+  function computeCutPoints(physW, physH, scale, fullH) {
+    const logicalH = physH / scale;            // 1440 逻辑高
+    const blocks = [];
+    // 收集块级元素（段落/标题/列表/代码块/表格/图片/公式等）的逻辑 Y 范围
+    previewContent.querySelectorAll('h1,h2,h3,h4,p,ul,ol,pre,table,figure,.math-block,blockquote,hr').forEach((el) => {
+      const top = el.offsetTop;
+      const h = el.offsetHeight;
+      if (top >= 0 && h > 0) blocks.push({ top, bottom: top + h });
+    });
+    blocks.sort((a, b) => a.top - b.top);
+
+    const cuts = [];
+    let start = 0;
+    const totalLogical = fullH / scale;
+    while (start < totalLogical - 1) {
+      const target = start + logicalH;
+      if (target >= totalLogical - 1) {
+        cuts.push([start, totalLogical]);
+        break;
+      }
+      // 在 [target - logicalH*0.35, target] 范围内找最接近 target 的块边界
+      const searchStart = target - logicalH * 0.35;
+      let best = null;
+      let bestScore = Infinity;
+      for (const b of blocks) {
+        if (b.bottom < searchStart || b.bottom > target) continue;
+        const score = target - b.bottom;       // 越接近 target 分越低
+        if (score < bestScore) { bestScore = score; best = b.bottom; }
+        // 也考虑块顶
+        if (b.top >= searchStart && b.top <= target) {
+          const s2 = target - b.top;
+          if (s2 < bestScore) { bestScore = s2; best = b.top; }
+        }
+      }
+      const cut = best !== null ? best : target;
+      cuts.push([start, cut]);
+      start = cut;
+    }
+    return cuts;
+  }
+
+  function downloadCanvas(canvas, name) {
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => {
+        if (!blob) { resolve(); return; }
+        const a = document.createElement('a');
+        a.download = name;
+        a.href = URL.createObjectURL(blob);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); resolve(); }, 100);
+      }, 'image/png');
+    });
   }
 
   // ── 图片插入 ──
