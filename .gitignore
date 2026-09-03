@@ -4,3 +4,8 @@ node_modules/
 out/
 dist/
 *.log
+
+# web 构建产物（由 web/build.sh 生成）
+web/m2a-render.js
+web/vendor/
+web/src/cm-entry.js
