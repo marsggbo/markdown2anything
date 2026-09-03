@@ -78,7 +78,7 @@ if (!skipBuild) {
 
   // 复制关键文件（node_modules 依赖也要带上，否则 vsce 打包后运行时缺依赖）
   const copyDirs = ['lib', 'scripts', 'webview', 'templates', 'ppt-themes', 'skills', 'cli', 'images', 'electron', 'node_modules'];
-  const copyFiles = ['extension.js', 'package.json', 'README.md', 'CHANGELOG.md', 'icon.png', 'LICENSE'];
+  const copyFiles = ['extension.js', 'package.json', 'README.md', 'CHANGELOG.md', 'icon.png', 'LICENSE', '.vscodeignore'];
   for (const d of copyDirs) {
     if (fs.existsSync(path.join(root, d))) {
       fs.cpSync(path.join(root, d), path.join(TMP, d), { recursive: true });
