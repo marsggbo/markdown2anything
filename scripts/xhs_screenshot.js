@@ -44,8 +44,12 @@ function findChromium() {
   const home = os.homedir();
 
   // 1. Playwright 管理的 Chromium（python playwright / node playwright 共用缓存）
-  const cacheDir = path.join(home, '.cache', 'ms-playwright');
-  if (fs.existsSync(cacheDir)) {
+  const cacheDirs = [
+    path.join(home, '.cache', 'ms-playwright'),
+    process.platform === 'darwin' ? path.join(home, 'Library', 'Caches', 'ms-playwright') : null,
+  ].filter(Boolean);
+  for (const cacheDir of cacheDirs) {
+    if (!fs.existsSync(cacheDir)) continue;
     const entries = fs.readdirSync(cacheDir).filter(e => e.startsWith('chromium'));
     for (const entry of entries) {
       const candidates = {
@@ -55,6 +59,13 @@ function findChromium() {
       };
       const p = candidates[process.platform];
       if (p && fs.existsSync(p)) return p;
+      // 新版 playwright 用 headless shell 也可
+      if (process.platform === 'darwin') {
+        const shell = path.join(cacheDir, entry, 'chrome-headless-shell-mac-arm64', 'chrome-headless-shell');
+        if (fs.existsSync(shell)) return shell;
+        const shellX64 = path.join(cacheDir, entry, 'chrome-headless-shell-mac-x64', 'chrome-headless-shell');
+        if (fs.existsSync(shellX64)) return shellX64;
+      }
     }
   }
 

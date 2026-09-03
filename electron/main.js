@@ -50,7 +50,9 @@ function saveConfigToDisk() {
 
 function renderAndSendPreview(mdPath) {
   try {
-    const { bodyHtml, title } = renderMarkdown(mdPath);
+    const { bodyHtml, title, rawMarkdown } = renderMarkdown(mdPath);
+    lastBodyHtml = bodyHtml;
+    lastRawMarkdown = rawMarkdown;
     const theme = getTheme(currentThemeId);
     sendToRenderer('update', {
       bodyHtml,
@@ -94,7 +96,8 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: 'MD2WeChat - Markdown Export',
+    title: 'Markdown2Anything',
+    show: !process.env.M2A_HEADLESS,   // 后台测试时不显示窗口
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -102,7 +105,7 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, '..', 'web', 'index.html'));
+  mainWindow.loadFile(path.join(__dirname, 'panel.html'));
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -186,8 +189,9 @@ ipcMain.handle('getAppPath', () => {
 
 // ── Save file to current path ─────────────────────────
 
-ipcMain.on('saveFile', (_event, content) => {
-  if (currentFilePath) {
+ipcMain.on('saveFile', (_event, msg) => {
+  const content = typeof msg === 'string' ? msg : (msg && msg.content);
+  if (currentFilePath && typeof content === 'string') {
     try {
       fs.writeFileSync(currentFilePath, content, 'utf8');
       renderAndSendPreview(currentFilePath);
@@ -199,7 +203,9 @@ ipcMain.on('saveFile', (_event, content) => {
 
 // ── Editor content changed (debounced by renderer) ──────
 
-ipcMain.on('editorContentChanged', (_event, content) => {
+ipcMain.on('editorContentChanged', (_event, msg) => {
+  const content = typeof msg === 'string' ? msg : (msg && msg.content);
+  if (typeof content !== 'string') { sendToRenderer('error', { message: '无效的编辑器内容' }); return; }
   const tmpDir = os.tmpdir();
   const tmpFile = path.join(tmpDir, `markdown2anything_edit_${crypto.randomUUID()}.md`);
   try {
@@ -270,36 +276,34 @@ ipcMain.on('newFile', () => {
 // ── Export HTML ────────────────────────────────────────
 
 ipcMain.on('exportHtml', async () => {
-  if (!currentFilePath) {
-    sendToRenderer('error', { message: '请先打开或保存一个 Markdown 文件' });
+  if (!lastBodyHtml) {
+    sendToRenderer('error', { message: '请先在左侧编辑器输入内容' });
     return;
   }
 
   try {
-    const dirName = path.dirname(currentFilePath);
-    const outputDir = configStore.outputPath || 'build';
-    const outputPath = path.join(dirName, outputDir, 'wechat.html');
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: '保存 HTML',
+      defaultPath: 'markdown.html',
+      filters: [{ name: 'HTML', extensions: ['html'] }],
+    });
+    if (result.canceled || !result.filePath) return;
     const templatePath = getTemplatePath();
-
     if (!templatePath) {
       sendToRenderer('error', { message: '找不到模板文件' });
       return;
     }
-
-    convertMarkdownToWeChat(currentFilePath, templatePath, outputPath);
-
+    const theme = getTheme(currentThemeId);
+    const html = buildWechatCopyHtml(lastBodyHtml, templatePath, theme);
+    fs.writeFileSync(result.filePath, html, 'utf8');
     const action = await dialog.showMessageBox(mainWindow, {
       type: 'info',
       title: '导出完成',
-      message: `HTML 已导出到:\n${outputPath}`,
+      message: `HTML 已导出到:\n${result.filePath}`,
       buttons: ['打开文件', '打开目录', '确定'],
     });
-
-    if (action.response === 0) {
-      shell.openPath(outputPath);
-    } else if (action.response === 1) {
-      shell.showItemInFolder(outputPath);
-    }
+    if (action.response === 0) shell.openPath(result.filePath);
+    else if (action.response === 1) shell.showItemInFolder(result.filePath);
   } catch (err) {
     sendToRenderer('error', { message: err.message });
   }
@@ -307,36 +311,305 @@ ipcMain.on('exportHtml', async () => {
 
 // ── Get WeChat HTML ────────────────────────────────────
 
+// 最近一次渲染的正文（编辑器临时内容 / 打开的文件），供复制/导出使用
+let lastBodyHtml = '';
+let lastRawMarkdown = '';
+
 ipcMain.on('getWechatHtml', () => {
   try {
-    const mdPath = currentFilePath;
-    if (!mdPath) {
-      sendToRenderer('wechatHtmlError', { message: '请先打开或保存文件' });
+    if (!lastBodyHtml) {
+      sendToRenderer('wechatHtmlError', { message: '请先在左侧编辑器输入内容' });
       return;
     }
-    const { bodyHtml } = renderMarkdown(mdPath);
     const templatePath = getTemplatePath();
     const theme = getTheme(currentThemeId);
-    const html = buildWechatCopyHtml(bodyHtml, templatePath, theme);
+    const html = buildWechatCopyHtml(lastBodyHtml, templatePath, theme);
     sendToRenderer('wechatHtml', { html });
   } catch (err) {
     sendToRenderer('wechatHtmlError', { message: err.message });
   }
 });
 
+// ── Editor / preview sync（Electron 内编辑器与预览同页，主进程仅透传/记录）──
+
+ipcMain.on('savePreviewSetting', (_event, msg) => {
+  // panel 已本地应用；记录到 config 持久化
+  if (msg && msg.key !== undefined) {
+    configStore.previewSettings = configStore.previewSettings || {};
+    configStore.previewSettings[msg.key] = msg.value;
+    saveConfigToDisk();
+  }
+  sendToRenderer('savePreviewSettingDone', { key: msg && msg.key });
+});
+
+ipcMain.on('requestCursorLine', () => {
+  // Electron 编辑器与预览同页，由注入脚本直接处理，主进程无需响应
+});
+
+ipcMain.on('scrollToEditorLine', () => {
+  // 同上
+});
+
+// ── LLM 配置（Electron 本地持久化 + OpenAI 兼容测试）──
+
+const LLM_PATH = path.join(app.getPath('userData'), 'llm-config.json');
+
+function loadLlmConfig() {
+  try { return JSON.parse(fs.readFileSync(LLM_PATH, 'utf8')) || { profiles: [] }; }
+  catch (_) { return { profiles: [] }; }
+}
+function saveLlmConfig(llm) {
+  try { fs.writeFileSync(LLM_PATH, JSON.stringify(llm, null, 2), 'utf8'); } catch (_) {}
+}
+
+ipcMain.on('llmGetConfig', () => {
+  sendToRenderer('llmConfig', { llm: loadLlmConfig() });
+});
+
+ipcMain.on('llmSaveConfig', (_event, msg) => {
+  try {
+    const { profileId, baseUrl, model, apiKey, profileName, deleteProfile } = msg || {};
+    const llm = loadLlmConfig();
+    const profiles = Array.isArray(llm.profiles) ? llm.profiles : [];
+    if (deleteProfile) {
+      const updated = profiles.filter((p) => p.id !== profileId);
+      saveLlmConfig({ profiles: updated });
+      sendToRenderer('llmConfigSaved', { llm: { profiles: updated } });
+      return;
+    }
+    const now = new Date().toISOString();
+    if (profileId && profiles.some((p) => p.id === profileId)) {
+      const updated = profiles.map((p) => {
+        if (p.id !== profileId) return p;
+        const np = { ...p, baseUrl, model, name: profileName || p.name, updatedAt: now };
+        if (apiKey) np.apiKey = apiKey;
+        return np;
+      });
+      saveLlmConfig({ profiles: updated });
+      sendToRenderer('llmConfigSaved', { llm: { profiles: updated } });
+    } else {
+      const id = profileId || ('p_' + Date.now().toString(36));
+      const np = { id, baseUrl, model, name: profileName || model, apiKey: apiKey || '', createdAt: now, updatedAt: now };
+      const updated = profiles.concat([np]);
+      saveLlmConfig({ profiles: updated });
+      sendToRenderer('llmConfigSaved', { llm: { profiles: updated } });
+    }
+  } catch (err) {
+    sendToRenderer('llmConfigError', { message: err.message });
+  }
+});
+
+ipcMain.on('llmGetProfileKey', (_event, msg) => {
+  const llm = loadLlmConfig();
+  const p = (llm.profiles || []).find((x) => x.id === (msg && msg.profileId));
+  sendToRenderer('llmProfileKey', { profileId: msg && msg.profileId, key: p && p.apiKey || '' });
+});
+
+ipcMain.on('llmTestConnection', async (_event, msg) => {
+  try {
+    const { baseUrl, model, apiKey } = msg || {};
+    if (!baseUrl || !model) { sendToRenderer('llmTestResult', { ok: false, message: '请填写接口地址和模型' }); return; }
+    const endpoint = String(baseUrl).replace(/\/+$/, '') + '/chat/completions';
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (apiKey || '') },
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: 'ping' }], max_tokens: 8 }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    if (!res.ok) { sendToRenderer('llmTestResult', { ok: false, message: 'HTTP ' + res.status + ' ' + (await res.text()).slice(0, 120) }); return; }
+    const data = await res.json();
+    const reply = (data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+    sendToRenderer('llmTestResult', { ok: true, reply: String(reply).slice(0, 80) });
+  } catch (err) {
+    sendToRenderer('llmTestResult', { ok: false, message: err.message });
+  }
+});
+
+// llmTestAll / llmExportConfig / llmImportConfig / llmFetchFreeModels：提供基本实现
+ipcMain.on('llmTestAll', () => sendToRenderer('llmTestAllProgress', { total: 0, done: 0 }));
+ipcMain.on('llmExportConfig', () => {
+  const llm = loadLlmConfig();
+  const profiles = (llm.profiles || []).map(({ id, baseUrl, model, name }) => ({ id, baseUrl, model, name }));
+  sendToRenderer('llmExportResult', { ok: true, json: JSON.stringify(profiles, null, 2) });
+});
+ipcMain.on('llmImportConfig', (_event, msg) => {
+  try {
+    const arr = JSON.parse((msg && msg.json) || '[]');
+    if (!Array.isArray(arr)) throw new Error('格式错误');
+    const llm = loadLlmConfig();
+    const existing = Array.isArray(llm.profiles) ? llm.profiles : [];
+    let imported = 0;
+    for (const item of arr) {
+      if (!item || !item.model) continue;
+      const dup = existing.find((p) => p.baseUrl === item.baseUrl && p.model === item.model);
+      if (dup) continue;
+      existing.push({ id: item.id || ('p_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)), baseUrl: item.baseUrl, model: item.model, name: item.name || item.model, apiKey: '', createdAt: new Date().toISOString() });
+      imported++;
+    }
+    saveLlmConfig({ profiles: existing });
+    sendToRenderer('llmImportResult', { ok: true, imported, llm: { profiles: existing } });
+  } catch (err) {
+    sendToRenderer('llmImportResult', { ok: false, message: err.message });
+  }
+});
+ipcMain.on('llmFetchFreeModels', () => sendToRenderer('llmFreeModels', { models: [], error: 'Electron 版暂未接入 OpenRouter 免费模型' }));
+
+// ── 知乎发布（复用 lib/zhihu.js）──
+
+const zhihu = require('../lib/zhihu');
+const ZHIHU_COOKIE_PATH = path.join(app.getPath('userData'), 'zhihu-cookie.txt');
+
+function getZhihuCookie() {
+  try { return fs.readFileSync(ZHIHU_COOKIE_PATH, 'utf8'); } catch (_) { return ''; }
+}
+function setZhihuCookie(v) {
+  try { fs.writeFileSync(ZHIHU_COOKIE_PATH, v, 'utf8'); } catch (_) {}
+}
+
+ipcMain.on('zhihuCheckLogin', async () => {
+  try {
+    const cookieStr = getZhihuCookie();
+    if (zhihu.isLoggedIn(cookieStr)) {
+      const info = await zhihu.verifyLogin(cookieStr);
+      sendToRenderer('zhihuLoginStatus', { loggedIn: info.valid, name: info.name });
+    } else {
+      sendToRenderer('zhihuLoginStatus', { loggedIn: false });
+    }
+  } catch (err) {
+    sendToRenderer('zhihuLoginStatus', { loggedIn: false });
+  }
+});
+
+ipcMain.on('zhihuStartQr', async () => {
+  const { spawn } = require('child_process');
+  const scriptPath = path.join(__dirname, '..', 'scripts', 'zhihu_login.js');
+  sendToRenderer('zhihuQrProgress', { message: '正在启动浏览器，请在弹出的窗口中登录...' });
+  const proc = spawn(process.execPath, [scriptPath], { env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: path.join(os.homedir(), 'Library', 'Caches', 'ms-playwright') } });
+  proc.stdout.on('data', async (d) => {
+    const text = d.toString();
+    for (const line of text.split('\n')) {
+      const l = line.trim();
+      if (l === 'READY') { sendToRenderer('zhihuQrReady'); }
+      else if (l.startsWith('COOKIE:')) {
+        try {
+          const cookies = JSON.parse(l.slice(7));
+          const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
+          const info = await zhihu.verifyLogin(cookieStr);
+          if (info.valid) { setZhihuCookie(cookieStr); sendToRenderer('zhihuPollResult', { status: 'confirmed', name: info.name }); }
+          else sendToRenderer('zhihuQrError', { message: '登录成功但 Cookie 验证失败' });
+        } catch (e) { sendToRenderer('zhihuQrError', { message: '解析登录结果失败：' + e.message }); }
+      } else if (l.startsWith('ERROR:')) { sendToRenderer('zhihuQrError', { message: l.slice(6) }); }
+    }
+  });
+  proc.on('error', (err) => sendToRenderer('zhihuQrError', { message: '启动失败：' + err.message }));
+});
+
+ipcMain.on('zhihuPollQr', () => {});
+
+ipcMain.on('zhihuLogout', () => {
+  setZhihuCookie('');
+  sendToRenderer('zhihuLoginStatus', { loggedIn: false });
+});
+
+ipcMain.on('zhihuSaveCookie', async (_event, msg) => {
+  try {
+    const raw = String((msg && msg.z_c0) || '').trim();
+    if (!raw) { sendToRenderer('zhihuSaveCookieResult', { success: false, error: 'z_c0 值不能为空' }); return; }
+    const cookieStr = `z_c0=${raw};`;
+    const info = await zhihu.verifyLogin(cookieStr);
+    if (info.valid) { setZhihuCookie(cookieStr); sendToRenderer('zhihuSaveCookieResult', { success: true, name: info.name }); }
+    else sendToRenderer('zhihuSaveCookieResult', { success: false, error: 'Cookie 无效或已过期，请重新获取' });
+  } catch (err) {
+    sendToRenderer('zhihuSaveCookieResult', { success: false, error: err.message });
+  }
+});
+
+ipcMain.on('zhihuGetArticleId', () => {});
+
+ipcMain.on('zhihuPublish', async (_event, msg) => {
+  try {
+    const cookieStr = getZhihuCookie();
+    if (!zhihu.isLoggedIn(cookieStr)) { sendToRenderer('zhihuPublishResult', { success: false, error: '未登录，请先扫码登录' }); return; }
+    const title = String((msg && msg.title) || '').trim();
+    if (!title) { sendToRenderer('zhihuPublishResult', { success: false, error: '文章标题不能为空' }); return; }
+    const articleId = (msg && msg.articleId) || null;
+    if (!lastBodyHtml) { sendToRenderer('zhihuPublishResult', { success: false, error: '请先在左侧编辑器输入内容' }); return; }
+    sendToRenderer('zhihuPublishStart');
+    const htmlContent = zhihu.buildPublishHtml(lastBodyHtml);
+    if (articleId) {
+      const result = await zhihu.updateAndPublishArticle({ articleId, title, htmlContent, cookieStr });
+      sendToRenderer('zhihuPublishResult', { success: true, url: result.url || 'https://zhuanlan.zhihu.com/p/' + articleId });
+    } else {
+      const result = await zhihu.createAndPublishArticle({ title, htmlContent, cookieStr });
+      sendToRenderer('zhihuPublishResult', { success: true, url: result.url || '' });
+    }
+  } catch (err) {
+    sendToRenderer('zhihuPublishResult', { success: false, error: err.message });
+  }
+});
+
+ipcMain.on('zhihuSaveDraft', async (_event, msg) => {
+  try {
+    const cookieStr = getZhihuCookie();
+    if (!zhihu.isLoggedIn(cookieStr)) { sendToRenderer('zhihuSaveDraftResult', { success: false, error: '未登录，请先扫码登录' }); return; }
+    const title = String((msg && msg.title) || '').trim();
+    const articleId = (msg && msg.articleId) || null;
+    if (!lastBodyHtml) { sendToRenderer('zhihuSaveDraftResult', { success: false, error: '请先在左侧编辑器输入内容' }); return; }
+    const htmlContent = zhihu.buildPublishHtml(lastBodyHtml);
+    const result = await zhihu.saveAsDraft({ articleId, title, htmlContent, cookieStr });
+    sendToRenderer('zhihuSaveDraftResult', { success: true, editUrl: (result && result.editUrl) || '' });
+  } catch (err) {
+    sendToRenderer('zhihuSaveDraftResult', { success: false, error: err.message });
+  }
+});
+
+// ── PPT / Word 导出（Electron 版暂不支持，静默提示）──
+
+['exportPpt', 'exportWord', 'getPptLlmInstruction', 'pptDeleteVersion', 'pptGetVersions', 'pptLlmGenerate', 'pptSaveVersion', 'pptSwitchVersion', 'cancelPpt'].forEach((ch) => {
+  ipcMain.on(ch, () => {
+    sendToRenderer('error', { message: 'Electron 桌面版暂不支持 PPT / Word 导出，请使用 VS Code 插件版' });
+  });
+});
+
+ipcMain.on('setXhsExportMode', () => {
+  // Electron 小红书导出走 Playwright 经典模式，无需切换
+});
+
 // ── Get Zhihu HTML ─────────────────────────────────────
+
+// 知乎编辑器不识别 mac-dots/带样式的 <pre>，统一替换成最干净的 <pre><code> 纯文本
+function cleanZhihuCode(html) {
+  return String(html).replace(/<pre[^>]*>([\s\S]*?)<\/pre>/g, (fullMatch, preContent) => {
+    const codeMatch = preContent.match(/<code[^>]*>([\s\S]*?)<\/code>/);
+    if (!codeMatch) return fullMatch;
+    // 反转标签拿纯文本（hljs span / mac-dots svg 全部剥掉）
+    const raw = codeMatch[1]
+      .replace(/<[^>]+>/g, '')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, ' ')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/\r\n|\r/g, '\n');
+    const esc = String(raw).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<pre><code>${esc}</code></pre>`;
+  });
+}
 
 ipcMain.on('getZhihuHtml', () => {
   try {
-    const mdPath = currentFilePath;
-    if (!mdPath) {
-      sendToRenderer('zhihuHtmlError', { message: '请先打开或保存文件' });
+    if (!lastBodyHtml) {
+      sendToRenderer('zhihuHtmlError', { message: '请先在左侧编辑器输入内容' });
       return;
     }
-    const { bodyHtml } = renderMarkdown(mdPath);
     const templatePath = getTemplatePath();
     const theme = getTheme(currentThemeId);
-    const html = buildZhihuCopyHtml(bodyHtml, templatePath, theme);
+    const html = cleanZhihuCode(buildZhihuCopyHtml(lastBodyHtml, templatePath, theme));
     sendToRenderer('zhihuHtml', { html });
   } catch (err) {
     sendToRenderer('zhihuHtmlError', { message: err.message });
@@ -347,12 +620,10 @@ ipcMain.on('getZhihuHtml', () => {
 
 ipcMain.on('getXhsCopyHtml', () => {
   try {
-    const mdPath = currentFilePath;
-    if (!mdPath) {
-      sendToRenderer('xhsCopyHtmlError', { message: '请先打开或保存文件' });
+    if (!lastBodyHtml) {
+      sendToRenderer('xhsCopyHtmlError', { message: '请先在左侧编辑器输入内容' });
       return;
     }
-    const { bodyHtml } = renderMarkdown(mdPath);
     const theme = getTheme(currentThemeId);
     const html = buildXhsCopyHtml(bodyHtml, theme);
     sendToRenderer('xhsCopyHtml', { html });
@@ -439,8 +710,8 @@ function installChromium() {
 }
 
 ipcMain.on('generateXhsViaPython', async (_event, msg) => {
-  if (!currentFilePath) {
-    sendToRenderer('xhsPythonError', { message: '请先打开或保存文件' });
+  if (!lastBodyHtml) {
+    sendToRenderer('xhsPythonError', { message: '请先在左侧编辑器输入内容' });
     return;
   }
 
@@ -448,15 +719,14 @@ ipcMain.on('generateXhsViaPython', async (_event, msg) => {
   const { width = 1080, height = 1440, padding = 40, bg = '#ffffff', autoExport = false } = msg;
   const appRoot = path.join(__dirname, '..');
 
-  // Generate standalone render HTML
-  const { bodyHtml } = renderMarkdown(currentFilePath);
+  // Generate standalone render HTML（用最近渲染的正文，无需文件路径）
   const theme = getTheme(currentThemeId);
-  const htmlContent = buildXhsRenderHtml(bodyHtml, path.dirname(currentFilePath), theme);
+  const htmlContent = buildXhsRenderHtml(lastBodyHtml, os.tmpdir(), theme);
 
   const tmpHtml = path.join(os.tmpdir(), `markdown2anything_xhs_${crypto.randomUUID()}.html`);
-  const base = path.basename(currentFilePath, path.extname(currentFilePath));
+  const base = 'markdown2anything';
   const outDir = autoExport
-    ? path.join(path.dirname(currentFilePath), `${base}_xhs`)
+    ? path.join(os.homedir(), 'Desktop', `${base}_xhs`)
     : path.join(os.tmpdir(), `markdown2anything_xhs_preview_${crypto.randomUUID()}`);
 
   fs.writeFileSync(tmpHtml, htmlContent, 'utf8');
@@ -527,9 +797,11 @@ ipcMain.on('generateXhsViaPython', async (_event, msg) => {
 
 ipcMain.on('saveXhsImages', (_event, msg) => {
   try {
-    const dataUrls = msg.dataUrls || [];
-    const base = path.basename(currentFilePath, path.extname(currentFilePath));
-    const dir = path.join(path.dirname(currentFilePath), `${base}_xhs`);
+    const dataUrls = (msg && msg.dataUrls) || [];
+    if (!dataUrls.length) { sendToRenderer('saveXhsImagesError', { message: '没有可保存的图片' }); return; }
+    const dir = currentFilePath
+      ? path.join(path.dirname(currentFilePath), `${path.basename(currentFilePath, path.extname(currentFilePath))}_xhs`)
+      : path.join(os.homedir(), 'Desktop', 'markdown2anything_xhs');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
     dataUrls.forEach((dataUrl, i) => {
@@ -540,14 +812,16 @@ ipcMain.on('saveXhsImages', (_event, msg) => {
     });
 
     sendToRenderer('saveXhsImagesDone', { count: dataUrls.length, dir });
-    dialog.showMessageBox(mainWindow, {
-      type: 'info',
-      title: '导出完成',
-      message: `已导出 ${dataUrls.length} 张图片到:\n${dir}`,
-      buttons: ['打开目录', '确定'],
-    }).then(({ response }) => {
-      if (response === 0) shell.openPath(dir);
-    });
+    if (!process.env.M2A_HEADLESS) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: '导出完成',
+        message: `已导出 ${dataUrls.length} 张图片到:\n${dir}`,
+        buttons: ['打开目录', '确定'],
+      }).then(({ response }) => {
+        if (response === 0) shell.openPath(dir);
+      });
+    }
   } catch (err) {
     sendToRenderer('saveXhsImagesError', { message: err.message });
   }
@@ -556,12 +830,12 @@ ipcMain.on('saveXhsImages', (_event, msg) => {
 // ── Upload to WeChat (via FastPen API) ─────────────────
 
 ipcMain.on('upload', async (_event, msg) => {
-  if (!currentFilePath) {
-    sendToRenderer('uploadResult', { success: false, error: '请先打开或保存文件' });
+  if (!lastRawMarkdown) {
+    sendToRenderer('uploadResult', { success: false, error: '请先在左侧编辑器输入内容' });
     return;
   }
 
-  const { rawMarkdown } = renderMarkdown(currentFilePath);
+  const rawMarkdown = lastRawMarkdown;
   const { appid, appSecret, title, author, digest } = msg;
 
   if (!appid || !appSecret) {
