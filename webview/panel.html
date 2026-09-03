@@ -234,11 +234,12 @@
       /* 不用 flex 布局，zoom-canvas 用 margin:0 auto 居中，
          这样 CSS zoom 放大后 scrollHeight 真实增长，scrollTop 补偿才有效 */
     }
-    /* zoom-canvas：直接撑开 scroll 容器，margin auto 水平居中 */
+    /* zoom-canvas：直接撑开 scroll 容器，margin auto 水平居中
+       宽度跟随正文宽度滑块（--content-w 百分比，默认 70%） */
     .zoom-canvas {
       /* 宽度自适应容器，zoom 放大后 scrollWidth 自然增长 */
       width: 100%;
-      max-width: 680px;
+      max-width: var(--content-w, 70%);
       margin: 0 auto;
       /* zoom 由 JS 动态设置，默认 1 */
       box-sizing: border-box;
@@ -249,12 +250,14 @@
       padding: 32px 28px;
       min-height: 200px;
     }
-    /* 正文宽度档位（设置面板控制，body 类名切换）：
-       默认适中 720px；body.width-narrow/width-wide/width-full 覆盖 */
-    .article-wrapper { max-width: 720px; margin: 0 auto; }
-    body.width-narrow .article-wrapper { max-width: 560px; }
-    body.width-wide    .article-wrapper { max-width: 900px; }
-    body.width-full    .article-wrapper { max-width: none; }
+    /* 正文宽度：由设置面板的百分比滑块控制。
+       滑块值写入 body[data-content-width="N"]，这里映射成 CSS 变量，
+       预览区宽度随预览容器比例变化，适配不同屏幕（比固定 px 更合理）。 */
+    .zoom-canvas { max-width: var(--content-w, 70%); }
+    /* 全宽（100%）：不再有上限，真正铺满预览区 */
+    body[data-content-width="100"] .zoom-canvas { max-width: 100%; }
+    /* 向后兼容旧档位（narrow/medium/wide/full 由旧下拉产生） */
+    body.width-full .zoom-canvas { max-width: 100%; }
 
     /* ── 侧面板通用 ── */
     .side-panel {
@@ -1191,15 +1194,13 @@
 
         <div class="section-block">
           <div class="section-block-title">📐 正文宽度</div>
-          <p class="hint" style="margin-top:2px;color:#999;">控制预览正文的显示宽度。太宽时文字满屏、阅读费劲；太窄则图片/表格被压缩。</p>
-          <label>正文宽度</label>
-          <select id="setting-content-width" style="width:100%;box-sizing:border-box;padding:6px;background:#2a2a2a;color:#eee;border:1px solid #444;border-radius:4px;">
-            <option value="narrow">窄（约 560px，适合长文阅读）</option>
-            <option value="medium" selected>适中（约 720px，推荐）</option>
-            <option value="wide">宽（约 900px，适合表格/多图）</option>
-            <option value="full">全宽（铺满预览区，不设上限）</option>
-          </select>
-          <p class="hint" style="margin-top:6px;color:#999;">选择即生效，自动记忆为默认值。</p>
+          <p class="hint" style="margin-top:2px;color:#999;">按预览区宽度的百分比控制正文宽度，适配不同屏幕。越靠右越宽，100% 即全宽铺满。</p>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+            <input type="range" id="setting-content-width" min="50" max="100" step="1" value="70"
+                   style="flex:1;width:auto;accent-color:#0f766e;">
+            <span id="setting-content-width-label" style="min-width:72px;text-align:right;font-size:13px;color:#ccc;white-space:nowrap;">70%</span>
+          </div>
+          <p class="hint" style="margin-top:6px;color:#999;">拖动即生效，自动记忆为默认值。</p>
 
           <label style="margin-top:12px;display:flex;align-items:center;gap:8px;cursor:pointer;">
             <input type="checkbox" id="setting-width-current-only" style="width:auto;">
@@ -3379,29 +3380,42 @@
         [{panelId:'settings-panel',stateKey:'settingsPanelOpen'}]);
     });
 
-    // 正文宽度：读取已保存值并应用
+    // 正文宽度：百分比滑块（相对预览容器宽度，适配不同屏幕）
     const widthSel = document.getElementById('setting-content-width');
+    const widthLabel = document.getElementById('setting-content-width-label');
     const widthCurrentOnly = document.getElementById('setting-width-current-only');
-    let savedWidth = 'medium';
+    let savedWidth = 70;   // 百分比 50~100
     try {
       const st = (typeof vscode !== 'undefined' && vscode.getState) ? vscode.getState() : null;
-      if (st && st.contentWidth) savedWidth = st.contentWidth;
+      if (st && typeof st.contentWidth === 'number') savedWidth = st.contentWidth;
+      else if (st && typeof st.contentWidth === 'string') {
+        // 兼容旧档位（narrow/medium/wide/full → 百分比）
+        const map = { narrow: 58, medium: 70, wide: 88, full: 100 };
+        savedWidth = map[st.contentWidth] || 70;
+      }
     } catch (_) {}
-    // 初始化控件与 body 类
+    // 初始化控件与 body
     function applyContentWidth(w, remember) {
-      savedWidth = w || 'medium';
-      document.body.classList.remove('width-narrow', 'width-medium', 'width-wide', 'width-full');
-      document.body.classList.add('width-' + savedWidth);
-      if (widthSel) widthSel.value = savedWidth;
+      const pct = Math.min(100, Math.max(50, Math.round(Number(w) || 70)));
+      savedWidth = pct;
+      // 写入 CSS 变量 + data 属性（data-content-width="100" 触发全宽规则）
+      document.body.style.setProperty('--content-w', pct + '%');
+      document.body.setAttribute('data-content-width', String(pct));
+      if (widthSel) widthSel.value = String(pct);
+      if (widthLabel) widthLabel.textContent = pct + '%';
       if (remember !== false) {
         try {
           const st = (typeof vscode !== 'undefined' && vscode.setState) ? (vscode.getState() || {}) : {};
-          st.contentWidth = savedWidth;
+          st.contentWidth = pct;
           if (vscode.setState) vscode.setState(st);
         } catch (_) {}
-        vscode.postMessage({ type: 'savePreviewSetting', key: 'contentWidth', value: savedWidth });
+        vscode.postMessage({ type: 'savePreviewSetting', key: 'contentWidth', value: pct });
       }
     }
+    if (widthSel) widthSel.addEventListener('input', () => {
+      // 拖动过程中实时预览，不写持久化
+      applyContentWidth(widthSel.value, false);
+    });
     if (widthSel) widthSel.addEventListener('change', () => {
       const currentOnly = widthCurrentOnly && widthCurrentOnly.checked;
       applyContentWidth(widthSel.value, !currentOnly);

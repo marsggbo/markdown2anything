@@ -342,10 +342,10 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     }
 
     case 'savePreviewSetting': {
-      // 预览设置（正文宽度等）全局持久化到 VS Code 配置
+      // 预览设置（正文宽度百分比等）全局持久化到 VS Code 配置
       const cfg = vscode.workspace.getConfiguration('markdown2anything');
-      if (msg.key === 'contentWidth' && msg.value) {
-        await cfg.update('preview.contentWidth', String(msg.value), vscode.ConfigurationTarget.Global);
+      if (msg.key === 'contentWidth' && msg.value !== undefined && msg.value !== null) {
+        await cfg.update('preview.contentWidth', Number(msg.value), vscode.ConfigurationTarget.Global);
       }
       break;
     }
@@ -2275,7 +2275,7 @@ function sendConfig(panel) {
     appSecret: cfg.get('appSecret', ''),
     author: cfg.get('author', ''),
     digest: cfg.get('digest', ''),
-    previewContentWidth: cfg.get('preview.contentWidth', 'medium'),
+    previewContentWidth: cfg.get('preview.contentWidth', 70),
   });
 }
 
