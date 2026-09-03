@@ -5429,6 +5429,14 @@
     });
 
     window.__m2a_editor_view = view;
+
+    // 初始同步：启动即通知主进程渲染（空内容 → 空状态提示，非空 → 内容）
+    setTimeout(() => {
+      const v = window.__m2a_vscode || window.acquireVsCodeApi();
+      if (v && v.postMessage) {
+        v.postMessage({ type: 'editorContentChanged', content: view.state.doc.toString() });
+      }
+    }, 50);
   })();
   </script>
 </body>

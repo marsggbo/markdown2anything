@@ -51,11 +51,13 @@ function saveConfigToDisk() {
 function renderAndSendPreview(mdPath) {
   try {
     const { bodyHtml, title, rawMarkdown } = renderMarkdown(mdPath);
-    lastBodyHtml = bodyHtml;
-    lastRawMarkdown = rawMarkdown;
-    const theme = getTheme(currentThemeId);
-    // 空内容时显示友好空状态，避免白屏/占位符残留
+    // lastBodyHtml/lastRawMarkdown 始终存真实内容（供复制/发布用），空状态仅用于预览展示
     const isBlank = !rawMarkdown || !rawMarkdown.trim() || !bodyHtml || !bodyHtml.replace(/<[^>]*>/g, '').trim();
+    if (!isBlank) {
+      lastBodyHtml = bodyHtml;
+      lastRawMarkdown = rawMarkdown;
+    }
+    const theme = getTheme(currentThemeId);
     sendToRenderer('update', {
       bodyHtml: isBlank
         ? '<div style="text-align:center;padding:56px 24px;color:#999;font-size:15px;line-height:1.8;"><div style="font-size:44px;margin-bottom:14px;">✏️</div><div>在左侧编辑器中输入 Markdown 内容</div><div style="font-size:13px;color:#bbb;margin-top:6px;">右侧将实时渲染预览，支持公式、代码、表格、图片</div></div>'
