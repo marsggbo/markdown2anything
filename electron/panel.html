@@ -959,6 +959,16 @@
       color: #888;
     }
     #md-editor-pane .md-editor-foot .cm-count { color: #888; }
+
+    /* ── CodeMirror 深色主题基础（详细高亮配色由 EditorView.theme 注入）── */
+    #cm-editor-wrap .cm-editor {
+      background: #1e1e1e;
+      color: #d4d4d4;
+    }
+    #cm-editor-wrap .cm-editor.cm-focused { outline: none; }
+    #cm-editor-wrap .cm-editor .cm-scroller { color: #d4d4d4; }
+    #cm-editor-wrap .cm-editor .cm-content { caret-color: #fff; }
+    #cm-editor-wrap .cm-editor .cm-line { color: #d4d4d4; }
   </style>
 
 </head>
@@ -5322,6 +5332,43 @@
     const wrap = document.getElementById('cm-editor-wrap');
     if (!wrap) return;
 
+    // 深色主题（VS Code Dark+ 风格，通过 EditorView.theme 保证覆盖所有高亮类）
+    const m2aDarkTheme = EditorView.theme({
+      '&': { backgroundColor: '#1e1e1e', color: '#d4d4d4' },
+      '.cm-scroller': { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", lineHeight: '1.6', color: '#d4d4d4' },
+      '.cm-content': { caretColor: '#fff', padding: '10px 8px' },
+      '.cm-line': { color: '#d4d4d4' },
+      '.cm-cursor': { borderLeftColor: '#fff' },
+      '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': { backgroundColor: '#264f78' },
+      '.cm-activeLine': { backgroundColor: '#2a2a2a' },
+      '.cm-gutters': { backgroundColor: '#1e1e1e', color: '#6e7681', borderRight: '1px solid #2a2a2a' },
+      '.cm-activeLineGutter': { backgroundColor: '#262626' },
+      '.cm-lineNumbers .cm-gutterElement': { color: '#6e7681' },
+      // 语法高亮（VS Code Dark+）
+      '.ͼb': { color: '#569cd6' },        // keyword
+      '.ͼc': { color: '#608b4e' },        // comment
+      '.ͼd': { color: '#ce9178' },        // string
+      '.ͼe': { color: '#b5cea8' },        // number/atom
+      '.ͼf': { color: '#dcdcaa' },        // property
+      '.ͼg': { color: '#d4d4d4' },        // variableName
+      '.ͼh': { color: '#4ec9b0' },        // typeName
+      '.ͼi': { color: '#9cdcfe' },        // function
+      '.ͼj': { color: '#dcdcaa' },        // className
+      '.ͼk': { color: '#c586c0' },        // meta
+      '.ͼm': { color: '#d4d4d4' },        // operator
+      '.ͼn': { color: '#d4d4d4' },        // punctuation
+      '.ͼo': { color: '#d4d4d4' },        // bracket
+      '.ͼr': { color: '#569cd6' },        // heading
+      '.ͼv': { color: '#ce9178' },        // url
+      '.ͼq': { color: '#6a9955' },        // quote
+      // 数字类（markdown 实测：ͼ5=markup、ͼ6=link、ͼ9=strong/em、ͼ7/ͼ8 等）
+      '.ͼ5': { color: '#608b4e' },        // markup 标记
+      '.ͼ6': { color: '#569cd6' },        // link 文本
+      '.ͼ9': { color: '#d4d4d4' },        // 强调文本
+      '.ͼ7': { color: '#c586c0' },        // 强调标记
+      '.ͼ8': { color: '#ce9178' },        // 内联代码
+    }, { dark: true });
+
     const LS_KEY = 'm2a:electron:doc';
     const startDoc = localStorage.getItem(LS_KEY) || '';
     const charCount = document.getElementById('md-char-count');
@@ -5333,6 +5380,7 @@
         extensions: [
           basicSetup,
           markdown(),
+          m2aDarkTheme,
           EditorView.lineWrapping,
           EditorView.updateListener.of((u) => {
             if (u.docChanged) {
