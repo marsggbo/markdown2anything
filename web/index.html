@@ -4,13 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Markdown2Anything — 网页版</title>
+  <link rel="stylesheet" href="vendor/katex/katex.min.css">
+  <link rel="stylesheet" href="vendor/github.css">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     :root { --m2a-accent: #f59e0b; }
     html, body { height: 100%; }
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-      background: #1e1e1e; color: #ccc; display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+      background: #f5f4f0; color: #333; display: flex; flex-direction: column; height: 100vh; overflow: hidden;
     }
     /* ── 标题栏 ── */
     .titlebar {
@@ -36,18 +38,27 @@
     /* ── 主体 ── */
     .main { display: flex; flex: 1; min-height: 0; }
     .editor-pane {
-      width: 46%; min-width: 300px; display: flex; flex-direction: column; border-right: 1px solid #333;
+      width: 46%; min-width: 300px; display: flex; flex-direction: column; border-right: 1px solid #ddd;
     }
     .editor-pane .pane-head {
-      padding: 6px 12px; font-size: 11px; color: #888; background: #252526; border-bottom: 1px solid #333;
+      padding: 6px 12px; font-size: 11px; color: #888; background: #f0eee9; border-bottom: 1px solid #e2dfd8;
       display: flex; align-items: center; gap: 8px; flex-shrink: 0;
     }
     .editor-pane .pane-head .stat { margin-left: auto; color: #666; }
     #editor-host { flex: 1; overflow: hidden; }
-    #editor-host .cm-editor { height: 100%; font-size: 14px; }
-    .preview-pane { flex: 1; display: flex; flex-direction: column; background: #1e1e1e; min-width: 0; }
+    #editor-host .cm-editor { height: 100%; font-size: 14px; background: #fff; color: #1a1a1a; }
+    /* CodeMirror 浅色主题：白底深字，与预览一致，避免深色 UI 冲突 */
+    #editor-host .cm-editor.cm-focused { outline: none; }
+    #editor-host .cm-scroller { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; line-height: 1.7; }
+    #editor-host .cm-content { caret-color: #f59e0b; }
+    #editor-host .cm-line { padding: 0 4px; }
+    #editor-host .cm-activeLine { background: #faf7f0; }
+    #editor-host .cm-gutters { background: #f7f7f5; color: #999; border-right: 1px solid #eee; }
+    #editor-host .cm-activeLineGutter { background: #f0ece3; color: #666; }
+    #editor-host .cm-selectionBackground { background: #cfe3f7 !important; }
+    .preview-pane { flex: 1; display: flex; flex-direction: column; background: #fff; min-width: 0; }
     .preview-pane .pane-head {
-      padding: 6px 12px; font-size: 11px; color: #888; background: #252526; border-bottom: 1px solid #333;
+      padding: 6px 12px; font-size: 11px; color: #888; background: #f0eee9; border-bottom: 1px solid #e2dfd8;
       display: flex; align-items: center; gap: 8px; flex-shrink: 0;
     }
     .preview-pane .pane-head .title { color: #aaa; font-size: 12px; font-weight: 600; }

@@ -20,8 +20,14 @@ CMEOF
   --bundle --format=iife --global-name=CodeMirrorGlobal --platform=browser \
   --outfile=web/vendor/codemirror.bundle.js
 
-echo "── 3/3 复制 html2canvas ──"
+echo "── 3/4 复制 html2canvas ──"
 cp node_modules/html2canvas/dist/html2canvas.min.js web/vendor/html2canvas.min.js
 
+echo "── 4/4 复制 KaTeX CSS + 字体 + hljs 主题 ──"
+mkdir -p web/vendor/katex
+cp node_modules/katex/dist/katex.min.css web/vendor/katex/katex.min.css
+cp -r node_modules/katex/dist/fonts web/vendor/katex/fonts
+cp node_modules/highlight.js/styles/github.css web/vendor/github.css
+
 echo "✅ 构建完成"
-ls -la web/m2a-render.js web/vendor/codemirror.bundle.js web/vendor/html2canvas.min.js
+ls -la web/m2a-render.js web/vendor/codemirror.bundle.js web/vendor/html2canvas.min.js web/vendor/github.css
