@@ -5305,6 +5305,19 @@
   // ── Electron 桌面版：左侧 Markdown 编辑器（CodeMirror）──
   (function () {
     if (typeof window.CodeMirror === 'undefined' || !window.CodeMirror.EditorView) return;
+    // Electron：左侧编辑器占 42%，预览区较窄，默认正文宽度调为 88%
+    (function () {
+      try {
+        const saved = (typeof window.acquireVsCodeApi === 'function' && window.acquireVsCodeApi().getState());
+        if (!saved || !saved.contentWidth) {
+          document.body.style.setProperty('--content-w', '88%');
+          document.body.setAttribute('data-content-width', '88');
+          const sel = document.getElementById('setting-content-width');
+          if (sel) sel.value = '88';
+        }
+      } catch (_) {}
+    })();
+
     const { EditorView, basicSetup, markdown, EditorState } = window.CodeMirror;
     const wrap = document.getElementById('cm-editor-wrap');
     if (!wrap) return;
