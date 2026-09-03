@@ -487,8 +487,56 @@ def summarize(md):
   }
 
   async function exportXhs() {
-    // 网页版只保留完整单张长图（子图功能移除，Electron 版用 Playwright 做真正的多图）
+    // Electron：走 Playwright 真实浏览器截图（多张 1080×1440 子图，和插件一致，质量最高）
+    if (isElectron) {
+      return exportXhsElectron();
+    }
+    // 网页版：完整单张长图（子图在网页端质量不可靠，已移除）
     return exportXhsSingle();
+  }
+
+  // Electron 版小红书导出：Node 端 Playwright 截图切片（scripts/xhs_screenshot.js）
+  function exportXhsElectron() {
+    const theme = M2A.getTheme(currentThemeId);
+    showToast('⏳ 正在渲染多张子图（首次使用会下载 Chromium）…');
+    return new Promise((resolve) => {
+      let done = false;
+      const api = window.electronAPI;
+      const onDone = (payload) => {
+        if (done) return; done = true;
+        cleanup();
+        if (payload && payload.dataUrls && payload.dataUrls.length) {
+          api.send('saveXhsImages', { dataUrls: payload.dataUrls });
+          showToast(`✅ 已生成 ${payload.dataUrls.length} 张子图，正在保存…`, 'success');
+        } else {
+          showToast('导出未生成图片', 'error');
+        }
+        resolve();
+      };
+      const onError = (payload) => {
+        if (done) return; done = true;
+        cleanup();
+        showToast((payload && payload.message) || '导出失败', 'error');
+        resolve();
+      };
+      const cleanup = () => {
+        api.removeListener('xhsPythonDone', onDone);
+        api.removeListener('xhsPythonError', onError);
+        api.removeListener('xhsPythonProgress', onProgress);
+      };
+      const onProgress = (payload) => {
+        if (payload && payload.message) {
+          showToast('⏳ ' + payload.message, 'success');
+        }
+      };
+      api.on('xhsPythonDone', onDone);
+      api.on('xhsPythonError', onError);
+      api.on('xhsPythonProgress', onProgress);
+      api.send('generateXhsViaPython', {
+        width: XHS_W, height: XHS_H, padding: 40, bg: theme.wrapperBg || '#ffffff',
+        autoExport: true,
+      });
+    });
   }
 
   function downloadCanvas(canvas, name) {
