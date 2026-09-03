@@ -171,7 +171,8 @@ def summarize(md):
     `<svg width="52" height="12" viewBox="0 0 52 12" fill="none" xmlns="http://www.w3.org/2000/svg">` +
     `<circle cx="6" cy="6" r="6" fill="#FF5F56"/><circle cx="26" cy="6" r="6" fill="#FFBD2E"/><circle cx="46" cy="6" r="6" fill="#27C93F"/></svg>`;
 
-  function prepareCodeBlocksForCopy(html) {
+  function prepareCodeBlocksForCopy(html, mode) {
+    const isWechat = mode !== 'zhihu';
     return html.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/g, (fullMatch, preContent) => {
       const codeMatch = preContent.match(/<code([^>]*)>([\s\S]*?)<\/code>/);
       if (!codeMatch) return fullMatch;
@@ -192,15 +193,24 @@ def summarize(md):
       try { highlighted = M2A.hljs.highlight(rawCode, { language }).value; }
       catch (_) { highlighted = M2A.hljs.highlightAuto(rawCode).value; }
       highlighted = inlineHljsColors(highlighted);
-      // 换行→<br>，空格→&nbsp;（只操作文本节点，标签间不动）
-      highlighted = highlighted.replace(/(<[^>]*>)|([^<]+)/g, (m, tag, txt) => {
-        if (tag) return tag;
-        return txt.replace(/\r\n|\r|\n/g, '<br>').replace(/ /g, '&nbsp;');
-      });
+      if (isWechat) {
+        // 微信：换行→<br>，空格→&nbsp;（富文本编辑器压缩空白，必须显式保留）
+        highlighted = highlighted.replace(/(<[^>]*>)|([^<]+)/g, (m, tag, txt) => {
+          if (tag) return tag;
+          return txt.replace(/\r\n|\r|\n/g, '<br>').replace(/ /g, '&nbsp;');
+        });
+        return (
+          `<pre class="mac-code" style="font-size:90%;overflow-x:auto;border-radius:8px;padding:0;line-height:1.5;margin:10px 8px;background-color:#f6f8fa;border:1px solid #eaedf0;">` +
+          `<span class="mac-dots" style="display:block;margin:12px 16px 0;">${SVG_DOTS}</span>` +
+          `<code class="hljs ${language}" style="display:block;padding:0.5em 1em 1em;overflow-x:auto;text-indent:0;color:inherit;background:none;white-space:pre-wrap;word-break:break-all;margin:0;">${highlighted}</code>` +
+          `</pre>`
+        );
+      }
+      // 知乎：pre 保留原始换行/空格（不用 <br>/&nbsp;），去掉 mac-dots 避免知乎误判，
+      // 内联颜色保证高亮
       return (
-        `<pre class="mac-code" style="font-size:90%;overflow-x:auto;border-radius:8px;padding:0;line-height:1.5;margin:10px 8px;background-color:#f6f8fa;border:1px solid #eaedf0;">` +
-        `<span class="mac-dots" style="display:block;margin:12px 16px 0;">${SVG_DOTS}</span>` +
-        `<code class="hljs ${language}" style="display:block;padding:0.5em 1em 1em;overflow-x:auto;text-indent:0;color:inherit;background:none;white-space:pre-wrap;word-break:break-all;margin:0;">${highlighted}</code>` +
+        `<pre class="hljs" style="font-size:14px;line-height:1.6;border-radius:6px;padding:14px 16px;background-color:#f6f8fa;border:1px solid #e1e4e8;white-space:pre;overflow-x:auto;">` +
+        `<code class="hljs ${language}" style="background:none;color:inherit;white-space:pre;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">${highlighted}</code>` +
         `</pre>`
       );
     });
@@ -242,6 +252,19 @@ def summarize(md):
     if (!mjxPromise) {
       mjxPromise = new Promise((resolve, reject) => {
         if (window.MathJax && typeof window.MathJax.tex2svgPromise === 'function') { resolve(); return; }
+        // 关键配置（与插件 lib/converter.js getMjxState 一致）：
+        //   fontCache: 'none' → 每个公式 SVG 自带路径，不依赖 <defs>+<use> 引用，
+        //   否则微信/公众号粘贴时引用失效，公式不显示。
+        if (!window.MathJax) {
+          window.MathJax = {
+            tex: { inlineMath: [], displayMath: [], packages: { '[+]': ['base', 'ams', 'boldsymbol'] } },
+            svg: { fontCache: 'none' },
+            startup: { typeset: false },
+          };
+        } else {
+          window.MathJax.svg = window.MathJax.svg || {};
+          window.MathJax.svg.fontCache = 'none';
+        }
         const s = document.createElement('script');
         s.src = 'vendor/mathjax/tex-svg.js';
         s.onload = () => {
@@ -321,8 +344,8 @@ def summarize(md):
       }
     }
     let html = div.innerHTML;
-    // ── 代码块：内联颜色 + 空格/换行保留 ──
-    html = prepareCodeBlocksForCopy(html);
+    // ── 代码块：微信内联颜色+空格保留；知乎干净 <pre> 保留换行 ──
+    html = prepareCodeBlocksForCopy(html, platform);
     // ── 图片检测：data URI 图片（知乎/微信不支持，需要外链）──
     const dataUriImgs = (html.match(/<img[^>]+src="data:image[^"]*"/g) || []).length;
     return { html, dataUriImgs };
@@ -373,20 +396,32 @@ def summarize(md):
    * html2canvas 整页大高度会丢失内容，分块（每块 ~1300 逻辑高，重叠拼接）保证质量。
    */
   async function renderFullCanvas(theme, scale, logicalWidth) {
+    // ── 用独立离屏容器渲染，避免页面布局 CSS（zoom-canvas max-width:70% 等）干扰 ──
     const zoomCanvas = document.querySelector('.zoom-canvas');
-    const prevMaxW = zoomCanvas.style.maxWidth;
     const articleWrapper = previewContent.parentElement;
+    const prevMaxW = zoomCanvas.style.maxWidth;
     const prevWrapPad = articleWrapper.style.padding;
     const prevMinH = articleWrapper.style.minHeight;
-    // 固定宽度 + 小红书舒适留白 + 去掉 min-height 干扰（避免偏移错位）
+    // 固定页面预览宽度（保证内容按目标宽重新排版）
     zoomCanvas.style.maxWidth = logicalWidth + 'px';
     articleWrapper.style.padding = '40px 48px';
     articleWrapper.style.minHeight = '0';
     previewScroll.scrollTop = 0;
     await new Promise((r) => setTimeout(r, 120));
 
-    // 精确总高：内容自身高度（含 padding）
-    const totalH = Math.max(1, Math.ceil(previewContent.getBoundingClientRect().height));
+    // 克隆内容到离屏固定宽度容器（避免父容器 70% 限宽）
+    const clone = document.createElement('div');
+    clone.style.cssText = `position:absolute;left:-20000px;top:0;width:${logicalWidth}px;background:${theme.wrapperBg || '#ffffff'};`;
+    clone.style.padding = articleWrapper.style.padding;
+    clone.innerHTML = previewContent.innerHTML;
+    // 复制计算后样式（主题 CSS 已注入 #m2a-theme-css，作用于 .article-wrapper 后代，
+    // 克隆容器需要同样结构才能套用主题）
+    clone.className = 'article-wrapper m2a-clone';
+    document.body.appendChild(clone);
+    // 克隆容器里图片等相对资源已内联（data URI/绝对 URL），可直接渲染
+    await new Promise((r) => setTimeout(r, 100));
+
+    const totalH = Math.max(1, Math.ceil(clone.getBoundingClientRect().height));
     const physW = logicalWidth * scale;
     const out = document.createElement('canvas');
     out.width = physW;
@@ -401,7 +436,7 @@ def summarize(md):
       while (y < totalH && guard < 400) {
         guard++;
         const chunkLogicalH = Math.min(CHUNK_H, totalH - y);
-        const chunkCanvas = await html2canvas(previewContent, {
+        const chunkCanvas = await html2canvas(clone, {
           scale,
           backgroundColor: theme.wrapperBg || '#ffffff',
           useCORS: true,
@@ -418,6 +453,7 @@ def summarize(md):
         await new Promise((r) => setTimeout(r, 30));
       }
     } finally {
+      clone.remove();
       zoomCanvas.style.maxWidth = prevMaxW;
       articleWrapper.style.padding = prevWrapPad;
       articleWrapper.style.minHeight = prevMinH;
