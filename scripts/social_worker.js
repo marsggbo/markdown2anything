@@ -602,37 +602,6 @@ function truncateByWeight(text, budget) {
  *   ④ 通过剪贴板把 HTML 整体粘进编辑器（公式 eeimg / 代码 pre lang 都能被知乎识别）
  *   ⑤ 停在发布前，由用户自己点「发布」
  */
-/**
- * 起一个临时本地图床（带 CORS），把本地图片变成真正的 http:// 地址。
- * 这样粘贴进知乎编辑器时，它会把这些图当成"从网页复制来的远程图"，
- * 自己抓取并上传到 zhimg 图床 —— 全程不用碰它那些弹窗和文件对话框。
- */
-function startImageServer(images) {
-  const http = require('http');
-  const map = new Map();                       // /i0.png -> 本地路径
-  images.forEach((p, i) => map.set(`/i${i}${path.extname(p) || '.png'}`, p));
-
-  const MIME = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' };
-
-  const server = http.createServer((req, res) => {
-    const key = decodeURIComponent((req.url || '').split('?')[0]);
-    const file = map.get(key);
-    res.setHeader('Access-Control-Allow-Origin', '*');   // 关键：让知乎的页面能跨域抓
-    if (!file || !fs.existsSync(file)) { res.statusCode = 404; res.end('not found'); return; }
-    res.setHeader('Content-Type', MIME[path.extname(file).toLowerCase()] || 'application/octet-stream');
-    fs.createReadStream(file).pipe(res);
-  });
-
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      const port = server.address().port;
-      resolve({
-        server, port,
-        urls: images.map((p, i) => `http://127.0.0.1:${port}/i${i}${path.extname(p) || '.png'}`),
-      });
-    });
-  });
-}
 
 async function publishZhihu(page, def, { title, html, images, mode }) {
   const totalSteps = 4;
@@ -655,31 +624,27 @@ async function publishZhihu(page, def, { title, html, images, mode }) {
   await editor.waitFor({ state: 'visible', timeout: 30000 })
     .catch(() => { throw new Error('未找到正文编辑器'); });
 
-  // ── ② 把本地图变成 http:// 地址（临时本地图床，带 CORS）──
+  // ── ② 图片方案 ──
   //
-  // 之前三轮都栽在同一个地方：跟知乎编辑器的【图片弹窗 / 文件对话框】搏斗。
-  // 那条路上到处是坑（附件框和图片框长得一样、传完还得点「插入图片」、弹窗会叠加…），
-  // 每修一处就冒出新的一处。
+  // 之前的本地图床方案不可行：把图片暴露成 http://127.0.0.1:PORT 后整篇粘贴，
+  // 知乎编辑器会把它们当"远程图片"【后端抓取】，而知乎服务器访问不到用户本机的
+  // 127.0.0.1 → 编辑器里所有图片都显示「上传失败」（诊断：Editable-imageUploader is-error）。
   //
-  // 现在彻底绕开它：编辑器对【粘贴进来的远程图片】本来就会自动抓取并上传到自己图床，
-  // 它不认的只是 data: 开头的本地图。所以把图片用本地 HTTP 服务暴露成真正的 http:// 地址，
-  // 连同正文一起粘贴 —— 一个弹窗都不用碰。
+  // 现在改成走编辑器自己的上传通道（和自动发布小红书同一套做法）：
+  //   a. 正文里图片 src 先用唯一占位符（m2a-img-0/1/2...），粘贴时知乎不会去抓
+  //   b. 正文粘贴成功后再把本地图片逐个喂给编辑器的 <input type=file accept=image/*>
+  //      让知乎自己上传，回读它生成的 zhimg CDN 地址
+  //   c. 用真实 CDN 地址替换正文里的占位符（直接改编辑器 DOM 里对应 img 的 src）
   step(1, totalSteps, '准备图片');
-  let imgServer = null;
+  const imgPlaceholders = (images || []).map((_, i) => `__M2A_IMG_${i}__`);
   let finalHtml = html;
-
   if (images && images.length) {
-    imgServer = await startImageServer(images);
-    info(`已起临时本地图床（端口 ${imgServer.port}），${images.length} 张图`);
     let i = 0;
-    finalHtml = finalHtml.replace(/src="data:image[^"]*"/g, () => {
-      const u = imgServer.urls[i++];
-      return u ? `src="${u}"` : 'src=""';
-    });
+    finalHtml = finalHtml.replace(/src="data:image[^"]*"/g, () => `src="${imgPlaceholders[i++]}"`);
   }
 
-  // ── ③ 整篇粘贴（正文 + 图片一次性进去）──
-  step(2, totalSteps, '粘贴正文和图片');
+  // ── ③ 整篇粘贴（正文 + 图片占位符）──
+  step(2, totalSteps, '粘贴正文');
   const plain = finalHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
   await editor.click();
@@ -700,37 +665,51 @@ async function publishZhihu(page, def, { title, html, images, mode }) {
   }
   info(`正文已填入（${got.trim().length} 字）`);
 
-  // ── ④ 等知乎把这些远程图抓走、换成它自己的 zhimg 图床地址 ──
-  if (imgServer) {
-    step(3, totalSteps, '等知乎抓取图片');
-    info('等待知乎把图片抓取并上传到它自己的图床…');
-    let zhimg = 0, localLeft = images.length;
-    const deadline = Date.now() + 180000;
-    while (Date.now() < deadline) {
-      const st = await editor.evaluate(el => {
-        const srcs = [...el.querySelectorAll('img')].map(i => i.getAttribute('src') || i.src || '');
-        return {
-          zhimg: srcs.filter(s => /zhimg\.com/.test(s)).length,
-          local: srcs.filter(s => /127\.0\.0\.1/.test(s)).length,
-        };
-      }).catch(() => ({ zhimg: 0, local: 0 }));
-      zhimg = st.zhimg; localLeft = st.local;
-      if (zhimg >= images.length || localLeft === 0) break;
-      await page.waitForTimeout(2000);
+  // ── ④ 用编辑器自己的上传控件逐张传图，回读 zhimg 地址替换占位符 ──
+  if (images && images.length) {
+    step(3, totalSteps, '上传图片');
+    // 知乎编辑器有多个 file input（附件/图片等），用 accept 含 image/ 的图片上传控件
+    const imgInputSel = 'input[type="file"][accept*="image/"]';
+    const imgInput = page.locator(imgInputSel).first();
+    await imgInput.waitFor({ state: 'attached', timeout: 20000 })
+      .catch(() => { throw new Error('未找到知乎编辑器的图片上传控件'); });
+
+    const uploaded = [];
+    for (let i = 0; i < images.length; i++) {
+      info(`正在上传图片 ${i + 1}/${images.length}…`);
+      // 每次重新取控件：上传完第一张后知乎会重建 input，复用旧句柄会失效
+      await page.locator(imgInputSel).first().setInputFiles(images[i], { timeout: 60000 });
+      // 等知乎把这一个占位符对应的 <img> 换成 zhimg CDN 地址
+      const ph = imgPlaceholders[i];
+      let ok = false;
+      const deadline = Date.now() + 60000;
+      while (Date.now() < deadline) {
+        const src = await editor.evaluate((el, phh) => {
+          const imgs = [...el.querySelectorAll('img')];
+          const t = imgs.find(x => (x.getAttribute('src') || '').includes(phh));
+          return t ? (t.getAttribute('src') || '') : '';
+        }, ph).catch(() => '');
+        if (src && /zhimg\.com/.test(src)) { uploaded.push(src); ok = true; break; }
+        await page.waitForTimeout(2000);
+      }
+      if (!ok) info(`⚠️ 第 ${i + 1} 张图未检测到上传完成，可能还在处理`);
     }
 
-    if (zhimg >= images.length) {
-      info(`✅ 知乎已把 ${zhimg} 张图全部上传到自己的图床`);
-    } else if (zhimg > 0) {
-      info(`⚠️ 只有 ${zhimg}/${images.length} 张图被知乎接管，其余可能要手动补（预览区「📋 复制图片」→ 粘贴）`);
-    } else {
-      await dumpDiag(page, 'zhihu_images_not_fetched');
-      info(`⚠️ 知乎没有自动抓取图片（正文和代码都在）。请用预览区图片上的「📋 复制图片」按钮，逐张粘贴到对应位置。`);
+    if (uploaded.length === images.length) {
+      info(`✅ 全部 ${uploaded.length} 张图已上传到知乎图床`);
+    } else if (uploaded.length > 0) {
+      info(`⚠️ 只有 ${uploaded.length}/${images.length} 张图确认上传成功`);
     }
-    // 图床要留到浏览器关掉为止（知乎可能延迟抓取）
-    if (imgServer && zhimg >= images.length) {
-      setTimeout(() => { try { imgServer.server.close(); } catch (_) {} }, 30000);
-    }
+
+    // 回读：若知乎在上传时挪动了图片顺序或替换了节点，把占位符统一替换为已上传地址
+    await editor.evaluate((el, map) => {
+      [...el.querySelectorAll('img')].forEach(img => {
+        const src = img.getAttribute('src') || '';
+        for (const [ph, url] of Object.entries(map)) {
+          if (src.includes(ph)) { img.setAttribute('src', url); break; }
+        }
+      });
+    }, Object.fromEntries(imgPlaceholders.map((ph, i) => [ph, uploaded[i] || '']))).catch(() => {});
   }
 
   step(4, totalSteps, '内容就绪');
