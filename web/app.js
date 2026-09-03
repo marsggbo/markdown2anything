@@ -206,12 +206,12 @@ def summarize(md):
           `</pre>`
         );
       }
-      // 知乎：pre 保留原始换行/空格（不用 <br>/&nbsp;），去掉 mac-dots 避免知乎误判，
-      // 内联颜色保证高亮
+      // 知乎：最干净的 <pre><code> 纯文本代码（不带 span/class/样式），
+      // 知乎 ZEditor 对带高亮 span 的 pre 兼容差，纯 pre 最可靠识别为代码块
+      const rawPlain = rawCode.replace(/\r\n|\r/g, '\n');
+      const escCode = escapeHtml(rawPlain);
       return (
-        `<pre class="hljs" style="font-size:14px;line-height:1.6;border-radius:6px;padding:14px 16px;background-color:#f6f8fa;border:1px solid #e1e4e8;white-space:pre;overflow-x:auto;">` +
-        `<code class="hljs ${language}" style="background:none;color:inherit;white-space:pre;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">${highlighted}</code>` +
-        `</pre>`
+        `<pre><code>${escCode}</code></pre>`
       );
     });
   }
@@ -354,8 +354,12 @@ def summarize(md):
   async function copyHtml(platform) {
     const theme = M2A.getTheme(currentThemeId);
     const { html, dataUriImgs } = await buildCopyHtml(currentBodyHtml, platform, theme);
-    // 组装完整可粘贴 HTML（公式已是 SVG 自包含，仅需主题 CSS 内联）
-    const full = `<style>${theme.css}</style><div class="article-wrapper" style="padding:16px;background:${theme.wrapperBg};font-family:system-ui,-apple-system,'PingFang SC',sans-serif;">${html}</div>`;
+    // 组装完整可粘贴 HTML
+    // 微信：带主题 CSS 内联（微信接受 <style> 并内联到元素）
+    // 知乎：不带 <style>（避免主题 CSS 内联污染 <pre><code>，知乎才识别为代码块）
+    const full = platform === 'zhihu'
+      ? `<div class="article-wrapper" style="padding:16px;">${html}</div>`
+      : `<style>${theme.css}</style><div class="article-wrapper" style="padding:16px;background:${theme.wrapperBg};font-family:system-ui,-apple-system,'PingFang SC',sans-serif;">${html}</div>`;
     try {
       // 关键：必须写 text/html MIME，粘贴时目标编辑器才识别为富文本而非源码
       const plain = document.createElement('div');
@@ -482,82 +486,9 @@ def summarize(md):
     }
   }
 
-  /** 导出多张 1080×1440 子图（移动端适配） */
-  async function exportXhsMulti() {
-    const theme = M2A.getTheme(currentThemeId);
-    showToast('⏳ 正在生成多张子图…');
-    try {
-      const canvas = await renderFullCanvas(theme, XHS_SCALE, XHS_W);
-      const fullW = canvas.width;       // 物理宽 2160
-      const fullH = canvas.height;
-      const physW = XHS_W * XHS_SCALE;  // 2160
-      const physH = XHS_H * XHS_SCALE;  // 2880
-      const cutPoints = computeCutPoints(physW, physH, XHS_SCALE, fullH);
-      const title = (currentTitle || 'markdown').replace(/[\\/:*?"<>|]/g, '');
-      for (let i = 0; i < cutPoints.length; i++) {
-        const [y0, y1] = cutPoints[i];
-        const h = y1 - y0;
-        const slice = document.createElement('canvas');
-        slice.width = physW;
-        slice.height = physH;
-        const ctx = slice.getContext('2d');
-        ctx.fillStyle = theme.wrapperBg || '#ffffff';
-        ctx.fillRect(0, 0, physW, physH);
-        ctx.drawImage(canvas, 0, y0, physW, h, 0, 0, physW, h);
-        await downloadCanvas(slice, `${title}-${String(i + 1).padStart(2, '0')}.png`);
-      }
-      showToast(`✅ 已导出 ${cutPoints.length} 张子图（1080×1440）`, 'success');
-    } catch (e) {
-      console.error(e);
-      showToast('导出失败：' + e.message, 'error');
-    }
-  }
-
   async function exportXhs() {
-    // 保持兼容旧调用，默认导出完整单张长图（用户更满意）
+    // 网页版只保留完整单张长图（子图功能移除，Electron 版用 Playwright 做真正的多图）
     return exportXhsSingle();
-  }
-
-  // 计算切片点：每张目标 physH，向上找最近块级元素边界
-  function computeCutPoints(physW, physH, scale, fullH) {
-    const logicalH = physH / scale;            // 1440 逻辑高
-    const blocks = [];
-    // 收集块级元素（段落/标题/列表/代码块/表格/图片/公式等）的逻辑 Y 范围
-    previewContent.querySelectorAll('h1,h2,h3,h4,p,ul,ol,pre,table,figure,.math-block,blockquote,hr').forEach((el) => {
-      const top = el.offsetTop;
-      const h = el.offsetHeight;
-      if (top >= 0 && h > 0) blocks.push({ top, bottom: top + h });
-    });
-    blocks.sort((a, b) => a.top - b.top);
-
-    const cuts = [];
-    let start = 0;
-    const totalLogical = fullH / scale;
-    while (start < totalLogical - 1) {
-      const target = start + logicalH;
-      if (target >= totalLogical - 1) {
-        cuts.push([start, totalLogical]);
-        break;
-      }
-      // 在 [target - logicalH*0.35, target] 范围内找最接近 target 的块边界
-      const searchStart = target - logicalH * 0.35;
-      let best = null;
-      let bestScore = Infinity;
-      for (const b of blocks) {
-        if (b.bottom < searchStart || b.bottom > target) continue;
-        const score = target - b.bottom;       // 越接近 target 分越低
-        if (score < bestScore) { bestScore = score; best = b.bottom; }
-        // 也考虑块顶
-        if (b.top >= searchStart && b.top <= target) {
-          const s2 = target - b.top;
-          if (s2 < bestScore) { bestScore = s2; best = b.top; }
-        }
-      }
-      const cut = best !== null ? best : target;
-      cuts.push([start, cut]);
-      start = cut;
-    }
-    return cuts;
   }
 
   function downloadCanvas(canvas, name) {
@@ -722,7 +653,6 @@ def summarize(md):
     $('btn-copy-wechat').addEventListener('click', () => copyHtml('wechat'));
     $('btn-copy-zhihu').addEventListener('click', () => copyHtml('zhihu'));
     $('btn-export-xhs').addEventListener('click', exportXhs);
-    $('btn-export-xhs-multi').addEventListener('click', exportXhsMulti);
     // 粘贴事件：编辑器内粘贴图片直接插入
     document.addEventListener('paste', (e) => {
       const items = e.clipboardData && e.clipboardData.items;
