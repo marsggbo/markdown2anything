@@ -1145,24 +1145,23 @@
   </div><!-- /toolbar -->
 
 
-  <!-- 左侧 Markdown 编辑器（Electron 桌面版注入） -->
-  <div id="md-editor-pane">
-    <div class="md-editor-head">
-      <span>✏️ Markdown 编辑器</span>
-      <span class="md-actions">
-        <button id="btn-open-md" title="打开 Markdown 文件">📂 打开</button>
-        <button id="btn-new-md" title="新建文档">🆕 新建</button>
-      </span>
-    </div>
-    <div id="cm-editor-wrap"></div>
-    <div class="md-editor-foot">
-      <span class="cm-count" id="md-char-count">0 字符</span>
-      <span>自动保存到本地</span>
-    </div>
-  </div>
-
   <!-- 主内容区 -->
   <div class="main">
+    <!-- 左侧 Markdown 编辑器（Electron 桌面版注入） -->
+    <div id="md-editor-pane">
+      <div class="md-editor-head">
+        <span>✏️ Markdown 编辑器</span>
+        <span class="md-actions">
+          <button id="btn-open-md" title="打开 Markdown 文件">📂 打开</button>
+          <button id="btn-new-md" title="新建文档">🆕 新建</button>
+        </span>
+      </div>
+      <div id="cm-editor-wrap"></div>
+      <div class="md-editor-foot">
+        <span class="cm-count" id="md-char-count">0 字符</span>
+        <span>自动保存到本地</span>
+      </div>
+    </div>
     <!-- 目录面板（仅预览用，不影响导出） -->
     <div class="toc-panel" id="toc-panel">
       <div class="side-panel-header">📑 目录<button class="panel-close-btn" data-close-panel="toc-panel" data-close-state="tocPanelOpen">×</button></div>
