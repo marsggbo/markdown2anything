@@ -631,29 +631,28 @@ async function publishZhihu(page, def, { title, html, images, mode }) {
   // 127.0.0.1 → 编辑器里所有图片都显示「上传失败」（诊断：Editable-imageUploader is-error）。
   //
   // 现在改成走编辑器自己的上传通道（和自动发布小红书同一套做法）：
-  //   a. 正文里图片先替换成【占位段落】（不是 img 标签！），粘贴时知乎不会把它
-  //      当成图片去加载/上传，避免产生「图片导入失败」的红色失败占位
-  //   b. 粘贴正文成功后，逐个把本地图片喂给编辑器的 file input 让知乎上传
-  //   c. 回读上传后的 zhimg CDN 地址，用 Playwright 把占位段落替换为真实图片节点
+  //   a. 先通过编辑器的 file input 把本地图片逐张喂给知乎【自己的】上传流程，
+  //      回读知乎生成的 zhimg CDN 地址（这些图会先堆在编辑器末尾，无妨）
+  //   b. 拿到全部真实 URL 后【清空编辑器】，把 URL 回填进干净 HTML 重新整篇粘贴
+  //      —— 图片位置由 HTML 顺序决定，天然正确（不会再跑到文末/位置错乱）
+  //
+  // 为什么不能"粘贴占位段再原位替换"：知乎编辑器是 Draft.js，粘贴 HTML 时会
+  // 把自定义属性（如 data-m2a-img）剥离，占位段根本找不到 → 图全堆文末。
   step(1, totalSteps, '准备图片');
   const imgCount = (images && images.length) || 0;
+  const IMG_PLACEHOLDER = (i) => `__M2A_IMG_${i}__`;
+  // 先备份原始干净 HTML（图片 src 是 data URI）
+  let cleanHtml = html;
   let finalHtml = html;
+
+  // ── ③ 粘贴正文（图片位置先留占位文本，避免知乎当成图去抓）──
   if (imgCount > 0) {
     let i = 0;
-    // 用带 data 属性的空段落做占位，知乎不会把它当图片尝试加载
-    finalHtml = finalHtml.replace(/<img[^>]*src="data:image[^"]*"[^>]*>/g, () => {
-      const idx = i++;
-      return `<p data-m2a-img="${idx}">​</p>`;
-    });
-    // 兼容 figure 包裹的图片
-    finalHtml = finalHtml.replace(/<figure[^>]*>[\s\S]*?<\/figure>/g, (m) => {
-      if (!/data:image/.test(m)) return m;
-      const idx = i++;
-      return `<p data-m2a-img="${idx}">​</p>`;
-    });
+    // 图片标签（含 figure 包裹）→ 占位文本
+    finalHtml = finalHtml
+      .replace(/<figure[^>]*>[\s\S]*?<\/figure>/g, (m) => /data:image/.test(m) ? IMG_PLACEHOLDER(i++) : m)
+      .replace(/<img[^>]*src="data:image[^"]*"[^>]*>/g, () => IMG_PLACEHOLDER(i++));
   }
-
-  // ── ③ 整篇粘贴（正文 + 图片占位段落）──
   step(2, totalSteps, '粘贴正文');
   const plain = finalHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
@@ -675,68 +674,109 @@ async function publishZhihu(page, def, { title, html, images, mode }) {
   }
   info(`正文已填入（${got.trim().length} 字）`);
 
-  // ── ④ 用编辑器自己的上传控件逐张传图，把占位段落替换为真实图片 ──
+  // ── ④ 上传图片：拿到全部真实 zhimg URL ──
+  let uploaded = [];           // 每个元素: { placeholder, url } 按图片顺序
+  let uploadFails = 0;
   if (imgCount > 0) {
     step(3, totalSteps, '上传图片');
-    // 知乎编辑器有多个 file input，用 accept 含 image/ 的图片上传控件
     const imgInputSel = 'input[type="file"][accept*="image/"]';
-    const imgInput = page.locator(imgInputSel).first();
-    await imgInput.waitFor({ state: 'attached', timeout: 20000 })
+    await page.locator(imgInputSel).first().waitFor({ state: 'attached', timeout: 20000 })
       .catch(() => { throw new Error('未找到知乎编辑器的图片上传控件'); });
 
-    const uploaded = [];
+    // 先把编辑器里可能已存在的 zhimg 图排除（避免误判为本次新上传）
+    const before = await editor.evaluate(el => {
+      const s = new Set();
+      el.querySelectorAll('img').forEach(x => s.add(x.getAttribute('src') || ''));
+      return [...s];
+    }).catch(() => []);
+
     for (let i = 0; i < images.length; i++) {
       info(`正在上传图片 ${i + 1}/${images.length}…`);
-      // 每次重新取控件：上传完一张后知乎会重建 input
-      await page.locator(imgInputSel).first().setInputFiles(images[i], { timeout: 60000 });
-
-      // 等这一张上传完成：知乎编辑器底部会出现刚上传成功的图片（最新一张 zhimg img）
-      let newUrl = '';
-      const deadline = Date.now() + 60000;
-      while (Date.now() < deadline) {
-        // 取编辑器里最后出现的、尚未记录的 zhimg 图地址（本次新上传的）
-        const lastZhimg = await editor.evaluate(uploadedArr => {
-          const imgs = [...document.querySelectorAll('.public-DraftEditor-content img, div[contenteditable="true"] img')];
-          const zh = imgs.filter(x => /zhimg\.com/.test(x.getAttribute('src') || ''));
-          for (let k = zh.length - 1; k >= 0; k--) {
-            const s = zh[k].getAttribute('src') || '';
-            if (s && !uploadedArr.includes(s)) return s;
-          }
-          return '';
-        }, uploaded).catch(() => '');
-        if (lastZhimg) { newUrl = lastZhimg; break; }
-        await page.waitForTimeout(1500);
-      }
-
-      if (newUrl) {
-        uploaded.push(newUrl);
-        // 把对应的占位段落替换为真实图片节点
-        await editor.evaluate(({ idx, url }) => {
-          const ph = document.querySelector(`p[data-m2a-img="${idx}"]`);
-          if (ph) {
-            const img = document.createElement('img');
-            img.setAttribute('src', url);
-            img.setAttribute('eeimg', '1');
-            ph.replaceWith(img);
-          }
-        }, { idx: i, url: newUrl }).catch(() => {});
-      } else {
-        info(`⚠️ 第 ${i + 1} 张图未检测到上传完成`);
+      try {
+        // 每次重新取控件：上传完一张后知乎会重建 input
+        await page.locator(imgInputSel).first().setInputFiles(images[i], { timeout: 60000 });
+        // 等这一张上传完成：编辑器里出现新的 zhimg 图（不在 before 列表里）
+        let newUrl = '';
+        const deadline = Date.now() + 60000;
+        while (Date.now() < deadline) {
+          newUrl = await editor.evaluate(known => {
+            const imgs = [...document.querySelectorAll('.public-DraftEditor-content img, div[contenteditable="true"] img')];
+            const zh = imgs.filter(x => /zhimg\.com/.test(x.getAttribute('src') || ''));
+            for (let k = zh.length - 1; k >= 0; k--) {
+              const s = zh[k].getAttribute('src') || '';
+              if (s && !known.includes(s)) return s;
+            }
+            return '';
+          }, before).catch(() => '');
+          if (newUrl) break;
+          await page.waitForTimeout(1500);
+        }
+        if (newUrl) {
+          before.push(newUrl);
+          uploaded.push({ placeholder: IMG_PLACEHOLDER(uploaded.length), url: newUrl });
+        } else {
+          uploadFails++;
+          info(`⚠️ 第 ${i + 1} 张图上传超时（图片可能过大或格式不受支持）`);
+        }
+      } catch (e) {
+        uploadFails++;
+        info(`⚠️ 第 ${i + 1} 张图上传失败：${String(e.message || e).slice(0, 100)}`);
       }
     }
 
     if (uploaded.length === images.length) {
       info(`✅ 全部 ${uploaded.length} 张图已上传到知乎图床`);
     } else if (uploaded.length > 0) {
-      info(`⚠️ 只有 ${uploaded.length}/${images.length} 张图确认上传成功`);
+      info(`⚠️ 只有 ${uploaded.length}/${images.length} 张图确认上传成功${uploadFails ? `，${uploadFails} 张失败` : ''}`);
     } else {
       info(`⚠️ 图片上传未成功，正文和代码块都在，图片可在浏览器里手动补传`);
     }
 
-    // 清理可能的残留失败占位（知乎粘贴时若把占位段当成图片产生的红色失败框）
-    await editor.evaluate(el => {
-      el.querySelectorAll('figure.Editable-imageUploader, .Editable-imageUploader').forEach(f => f.remove());
-    }).catch(() => {});
+    // ── ⑤ 清空编辑器，用真实 URL 整篇重贴（图片位置随 HTML 顺序，正确）──
+    if (uploaded.length > 0) {
+      step(4, totalSteps, '回填图片重贴');
+      // 在干净 HTML 里把 data URI 图片依次替换为真实 CDN URL
+      let rebuilt = cleanHtml;
+      let idx = 0;
+      rebuilt = rebuilt
+        .replace(/<figure[^>]*>[\s\S]*?<\/figure>/g, (m) => /data:image/.test(m) ? `<p data-m2a-replace="${idx++}"> </p>` : m)
+        .replace(/<img[^>]*src="data:image[^"]*"[^>]*>/g, () => `<p data-m2a-replace="${idx++}"> </p>`);
+      // 只替换成功上传的；失败的保留占位文本，让用户知道这里有图
+      rebuilt = rebuilt.replace(/<p data-m2a-replace="(\d+)"> <\/p>/g, (m, n) => {
+        const hit = uploaded[n];
+        return hit ? `<img src="${hit.url}" data-m2a-img="1">` : IMG_PLACEHOLDER(Number(n));
+      });
+
+      // 清空编辑器
+      await editor.evaluate(el => {
+        el.focus();
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        sel.removeAllRanges(); sel.addRange(range);
+        document.execCommand('delete');
+      }).catch(() => {});
+      await page.waitForTimeout(500);
+
+      // 重贴
+      const rebuiltPlain = rebuilt.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      await editor.evaluate((el, { h, p }) => {
+        el.focus();
+        const dt = new DataTransfer();
+        dt.setData('text/html', h);
+        dt.setData('text/plain', p);
+        el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      }, { h: rebuilt, p: rebuiltPlain }).catch(() => {});
+      await page.waitForTimeout(3000);
+
+      const got2 = (await editor.innerText().catch(() => '')) || '';
+      info(`已重新粘贴（${got2.trim().length} 字，图片随正文位置插入）`);
+
+      // 清理残留失败占位（粘贴时若知乎把占位文本当图产生的红色失败框）
+      await editor.evaluate(el => {
+        el.querySelectorAll('figure.Editable-imageUploader, .Editable-imageUploader').forEach(f => f.remove());
+      }).catch(() => {});
+    }
   }
 
   step(4, totalSteps, '内容就绪');
