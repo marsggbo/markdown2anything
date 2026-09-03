@@ -51,6 +51,10 @@ function activate(context) {
   outputChannel = vscode.window.createOutputChannel('Markdown2Anything');
   log('Markdown2Anything 插件已激活');
 
+  // 一次性迁移：3.5.3 之前 cookie 明文存 globalState，升级后改为系统钥匙串（secrets）
+  // 加密存储。启动时把旧值搬进 secrets 并清掉明文，避免用户重新登录。
+  migrateLegacyCookies();
+
   context.subscriptions.push(
     vscode.commands.registerCommand('markdown2anything.preview', handlePreview),
     vscode.commands.registerCommand('markdown2anything.convert', handleConvert),
@@ -547,7 +551,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         // 知乎编辑器只认自己图床（zhimg.com）的图片，base64 粘贴会被拒绝。
         // 若用户已登录知乎，自动上传图片到知乎图床替换为 CDN URL，粘贴即可显示。
         const imgCount = (html.match(/data:image\//g) || []).length;
-        const cookieStr = extContext.globalState.get(zhihu.STORAGE_KEY, '');
+        const cookieStr = await getZhihuCookie();
         let imgUploaded = 0;
         if (imgCount > 0 && zhihu.isLoggedIn(cookieStr)) {
           panel.webview.postMessage({ type: 'zhihuHtmlProgress', message: `正在上传 ${imgCount} 张图片到知乎图床...` });
@@ -796,7 +800,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     // ─── 社交发布（小红书 / Twitter）：文案生成 + cookie 登录 + Playwright 发布 ───
     case 'socialGetInit': {
       const platform = msg.platform;
-      const cookies = social.getCookies(platform, socialStorage());
+      const cookies = await social.getCookies(platform, socialStorage());
       const status = social.cookieStatus(platform, cookies);
       const meta = readArticleMeta(mdPath);
       const images = listExportedXhsImages(mdPath);
@@ -1163,7 +1167,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
           onChild: (c) => { lastChild[platform] = c; },
           onProgress: (m) => panel.webview.postMessage({ type: 'socialLoginProgress', platform, message: m }),
         });
-        const status = social.cookieStatus(platform, social.getCookies(platform, socialStorage()));
+        const status = social.cookieStatus(platform, await social.getCookies(platform, socialStorage()));
         panel.webview.postMessage({ type: 'socialLoginResult', platform, status });
       } catch (e) {
         if (e.needInstall) {
@@ -1178,7 +1182,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     }
 
     case 'socialLogout': {
-      social.clearCookies(msg.platform, socialStorage());
+      await social.clearCookies(msg.platform, socialStorage());
       panel.webview.postMessage({ type: 'socialLoginResult', platform: msg.platform, status: { loggedIn: false, state: 'none' } });
       break;
     }
@@ -1186,7 +1190,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     case 'socialPublish': {
       const platform = msg.platform;
       try {
-        const cookies = social.getCookies(platform, socialStorage());
+        const cookies = await social.getCookies(platform, socialStorage());
         const status = social.cookieStatus(platform, cookies);
         if (!status.loggedIn) {
           panel.webview.postMessage({ type: 'socialPublishError', platform, message: '未登录或登录已失效，请先登录' });
@@ -1287,7 +1291,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       const platform = msg.platform;
       try {
         const cookies = social.parsePastedCookies(platform, msg.raw);
-        social.setCookies(platform, socialStorage(), cookies);
+        await social.setCookies(platform, socialStorage(), cookies);
         const status = social.cookieStatus(platform, cookies);
         panel.webview.postMessage({ type: 'socialLoginResult', platform, status });
         panel.webview.postMessage({ type: 'socialLoginProgress', platform, message: 'Cookie 已保存' });
@@ -1298,7 +1302,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     }
 
     case 'zhihuCheckLogin': {
-      const cookieStr = extContext.globalState.get(zhihu.STORAGE_KEY, '');
+      const cookieStr = await getZhihuCookie();
       if (zhihu.isLoggedIn(cookieStr)) {
         const info = await zhihu.verifyLogin(cookieStr);
         panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: info.valid, name: info.name });
@@ -1331,7 +1335,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
               const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
               const info = await zhihu.verifyLogin(cookieStr);
               if (info.valid) {
-                await extContext.globalState.update(zhihu.STORAGE_KEY, cookieStr);
+                await setZhihuCookie(cookieStr);
                 panel.webview.postMessage({ type: 'zhihuPollResult', status: 'confirmed', name: info.name });
                 log(`知乎登录成功: ${info.name}`);
               } else {
@@ -1360,7 +1364,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
 
     case 'zhihuLogout': {
-      await extContext.globalState.update(zhihu.STORAGE_KEY, undefined);
+      await setZhihuCookie('');
       extContext.globalState.update('zhihu._qrToken', undefined);
       extContext.globalState.update('zhihu._qrCookie', undefined);
       panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: false });
@@ -1382,7 +1386,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
           panel.webview.postMessage({ type: 'zhihuSaveCookieResult', success: false, error: 'Cookie 无效或已过期，请重新获取' });
           break;
         }
-        await extContext.globalState.update(zhihu.STORAGE_KEY, cookieStr);
+        await setZhihuCookie(cookieStr);
         panel.webview.postMessage({ type: 'zhihuSaveCookieResult', success: true, name: info.name });
         panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: true, name: info.name });
       } catch (err) {
@@ -1402,7 +1406,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
 
     case 'zhihuPublish': {
       try {
-        const cookieStr = extContext.globalState.get(zhihu.STORAGE_KEY, '');
+        const cookieStr = await getZhihuCookie();
         if (!zhihu.isLoggedIn(cookieStr)) {
           panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: '未登录，请先扫码登录' });
           break;
@@ -1430,7 +1434,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const { bodyHtml } = renderMarkdown(mdPath);
         const cleanHtml = zhihu.buildPublishHtml(bodyHtml);       // <pre lang="python"> + eeimg 公式 + 无 style
         const localImages = listMarkdownLocalImages(mdPath);      // 按出现顺序的本地图
-        const cookies = zhihuBrowserCookies();
+        const cookies = await zhihuBrowserCookies();
 
         if (!cookies.length) {
           panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: '未登录，请先扫码登录' });
@@ -1468,7 +1472,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
 
     case 'zhihuSaveDraft': {
       try {
-        const cookieStr = extContext.globalState.get(zhihu.STORAGE_KEY, '');
+        const cookieStr = await getZhihuCookie();
         if (!zhihu.isLoggedIn(cookieStr)) {
           panel.webview.postMessage({ type: 'zhihuDraftResult', success: false, error: '未登录，请先扫码登录' });
           break;
@@ -2011,12 +2015,46 @@ function localPrefill(mdPath, platform) {
 }
 
 // ─── 社交发布辅助 ───────────────────────────────
-/** cookie 存储适配器：委托 VS Code globalState，不落磁盘 */
+/** cookie 存储适配器：委托 VS Code secrets（系统钥匙串加密），不落明文磁盘 */
 function socialStorage() {
   return {
-    get: (k) => extContext.globalState.get(k, ''),
-    set: (k, v) => extContext.globalState.update(k, v),
+    get: (k) => extContext.secrets.get(k).then(v => v || ''),
+    set: (k, v) => extContext.secrets.store(k, String(v == null ? '' : v)),
+    delete: (k) => extContext.secrets.delete(k),
   };
+}
+
+/**
+ * 一次性迁移：3.5.3 之前 cookie 明文存 globalState（VS Code state.vscdb），
+ * 本版本起改存 secrets（系统钥匙串）。把旧明文搬到 secrets 后清掉。
+ * 知乎两个 key 都迁：zhihu.cookieString（字符串）+ zhihu.browserCookies（数组）
+ * 小红书/推特是 xiaohongshu.cookies / twitter.cookies。
+ */
+function migrateLegacyCookies() {
+  const legacyKeys = [
+    'zhihu.cookieString',
+    'zhihu.browserCookies',
+    'xiaohongshu.cookies',
+    'twitter.cookies',
+  ];
+  legacyKeys.forEach((key) => {
+    const old = extContext.globalState.get(key, undefined);
+    if (old == null || old === '') return;   // 没有旧值，跳过
+    extContext.secrets.store(key, String(old)).then(() => {
+      extContext.globalState.update(key, undefined);
+      log(`已将 cookie ${key} 迁移到系统钥匙串（加密存储）`);
+    }).catch((e) => log(`cookie ${key} 迁移失败: ${e.message}`));
+  });
+}
+
+/** 读知乎 cookie（系统钥匙串加密存储） */
+async function getZhihuCookie() {
+  return (await extContext.secrets.get(zhihu.STORAGE_KEY)) || '';
+}
+/** 写知乎 cookie（系统钥匙串加密存储）；传空/undefined 表示清除 */
+async function setZhihuCookie(str) {
+  if (!str) await extContext.secrets.delete(zhihu.STORAGE_KEY);
+  else await extContext.secrets.store(zhihu.STORAGE_KEY, str);
 }
 
 /** 读文章元信息：标题 + 全文链接（从 front matter permalink/url/link） */
@@ -2103,8 +2141,8 @@ function exportXhsImages(mdPath, panel, platform, retried = false, exportMode) {
 }
 
 /** 把已有的知乎 cookie 字符串转成 Playwright cookie 数组（复用现有扫码登录，不用重登） */
-function zhihuBrowserCookies() {
-  const str = extContext.globalState.get(zhihu.STORAGE_KEY, '') || '';
+async function zhihuBrowserCookies() {
+  const str = (await getZhihuCookie()) || '';
   return str.split(/;\s*/).map(p => {
     const i = p.indexOf('=');
     if (i <= 0) return null;
