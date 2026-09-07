@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Markdown2Anything 预览</title>
+  <title>Markdown2Anything ©marsggbo</title>
 
   <!-- KaTeX CSS（从扩展本地加载，支持字体） -->
   <link rel="stylesheet" href="../web/vendor/katex/katex.min.css">
@@ -893,31 +893,77 @@
   </style>
 
   <style>
-    /* ── 左侧 Markdown 编辑器栏（Electron 桌面版注入）── */
+    /* ── 左侧 Markdown 编辑器栏（Electron 桌面版注入，支持亮/暗模式）── */
     #md-editor-pane {
       display: flex;
       flex-direction: column;
       width: 42%;
       min-width: 300px;
       max-width: 55%;
-      background: #1e1e1e;
-      border-right: 1px solid #444;
       flex-shrink: 0;
       position: relative;
       z-index: 5;
+      /* 暗色模式（默认） */
+      --m2a-editor-bg: #1e1e1e;
+      --m2a-editor-bg2: #252526;
+      --m2a-editor-border: #444;
+      --m2a-editor-fg: #d4d4d4;
+      --m2a-editor-fg-dim: #aaa;
+      --m2a-editor-btn: #3a3a3a;
+      --m2a-editor-btn-hover: #4c4c4c;
+      --m2a-editor-gutter: #6e7681;
+      --m2a-editor-active: #2a2a2a;
+      --m2a-editor-select: #264f78;
+      --m2a-editor-cursor: #fff;
+      --m2a-editor-kw: #569cd6;      /* keyword */
+      --m2a-editor-comment: #608b4e; /* comment */
+      --m2a-editor-str: #ce9178;     /* string */
+      --m2a-editor-num: #b5cea8;     /* number */
+      --m2a-editor-fn: #dcdcaa;      /* function/prop */
+      --m2a-editor-type: #4ec9b0;    /* type */
+      --m2a-editor-var: #9cdcfe;     /* variable */
+      --m2a-editor-meta: #c586c0;    /* meta/emphasis */
+      --m2a-editor-url: #ce9178;     /* url */
+      --m2a-editor-quote: #6a9955;   /* quote */
+      background: var(--m2a-editor-bg);
+      border-right: 1px solid var(--m2a-editor-border);
+    }
+    /* 亮色模式 */
+    #md-editor-pane.light {
+      --m2a-editor-bg: #fafafa;
+      --m2a-editor-bg2: #f0f0f0;
+      --m2a-editor-border: #e0e0e0;
+      --m2a-editor-fg: #383a42;
+      --m2a-editor-fg-dim: #8a8a8a;
+      --m2a-editor-btn: #e4e4e4;
+      --m2a-editor-btn-hover: #d4d4d4;
+      --m2a-editor-gutter: #a0a0a0;
+      --m2a-editor-active: #e8e8e8;
+      --m2a-editor-select: #b6d7ff;
+      --m2a-editor-cursor: #333;
+      --m2a-editor-kw: #4078f2;      /* keyword */
+      --m2a-editor-comment: #a0a1a7; /* comment */
+      --m2a-editor-str: #c02626;     /* string */
+      --m2a-editor-num: #986801;     /* number */
+      --m2a-editor-fn: #a626a4;      /* function/prop */
+      --m2a-editor-type: #0184bc;    /* type */
+      --m2a-editor-var: #0184bc;     /* variable */
+      --m2a-editor-meta: #e45649;    /* meta/emphasis */
+      --m2a-editor-url: #0184bc;     /* url */
+      --m2a-editor-quote: #50a14f;   /* quote */
     }
     #md-editor-pane .md-editor-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
       padding: 6px 10px;
-      background: #252526;
-      border-bottom: 1px solid #444;
+      background: var(--m2a-editor-bg2);
+      border-bottom: 1px solid var(--m2a-editor-border);
       flex-shrink: 0;
     }
     #md-editor-pane .md-editor-head span {
       font-size: 12px;
-      color: #aaa;
+      color: var(--m2a-editor-fg-dim);
       font-weight: 600;
     }
     #md-editor-pane .md-editor-head .md-actions {
@@ -925,15 +971,15 @@
       gap: 6px;
     }
     #md-editor-pane .md-editor-head .md-actions button {
-      background: #3a3a3a;
-      color: #ddd;
+      background: var(--m2a-editor-btn);
+      color: var(--m2a-editor-fg);
       border: none;
       border-radius: 4px;
       padding: 3px 10px;
       font-size: 12px;
       cursor: pointer;
     }
-    #md-editor-pane .md-editor-head .md-actions button:hover { background: #4c4c4c; }
+    #md-editor-pane .md-editor-head .md-actions button:hover { background: var(--m2a-editor-btn-hover); }
     #cm-editor-wrap {
       flex: 1;
       overflow: hidden;
@@ -952,23 +998,23 @@
       align-items: center;
       justify-content: space-between;
       padding: 4px 10px;
-      background: #252526;
-      border-top: 1px solid #444;
+      background: var(--m2a-editor-bg2);
+      border-top: 1px solid var(--m2a-editor-border);
       flex-shrink: 0;
       font-size: 11px;
-      color: #888;
+      color: var(--m2a-editor-fg-dim);
     }
-    #md-editor-pane .md-editor-foot .cm-count { color: #888; }
+    #md-editor-pane .md-editor-foot .cm-count { color: var(--m2a-editor-fg-dim); }
 
     /* ── CodeMirror 深色主题基础（详细高亮配色由 EditorView.theme 注入）── */
     #cm-editor-wrap .cm-editor {
-      background: #1e1e1e;
-      color: #d4d4d4;
+      background: var(--m2a-editor-bg);
+      color: var(--m2a-editor-fg);
     }
     #cm-editor-wrap .cm-editor.cm-focused { outline: none; }
-    #cm-editor-wrap .cm-editor .cm-scroller { color: #d4d4d4; }
-    #cm-editor-wrap .cm-editor .cm-content { caret-color: #fff; }
-    #cm-editor-wrap .cm-editor .cm-line { color: #d4d4d4; }
+    #cm-editor-wrap .cm-editor .cm-scroller { color: var(--m2a-editor-fg); }
+    #cm-editor-wrap .cm-editor .cm-content { caret-color: var(--m2a-editor-cursor); }
+    #cm-editor-wrap .cm-editor .cm-line { color: var(--m2a-editor-fg); }
   </style>
 
 </head>
@@ -978,7 +1024,7 @@
   <div class="toolbar">
     <!-- 第一行：文档标题 -->
     <div class="toolbar-title-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-      <span class="toolbar-title" id="doc-title">Markdown2Anything 预览</span>
+      <span class="toolbar-title" id="doc-title">Markdown2Anything ©marsggbo</span>
       <span id="ext-version" title="当前运行的扩展版本" style="font-size:10px;color:#888;flex-shrink:0;">v4.0.0</span>
     </div>
 
@@ -1162,6 +1208,7 @@
       <div class="md-editor-head">
         <span>✏️ Markdown 编辑器</span>
         <span class="md-actions">
+          <button id="btn-editor-mode" title="切换编辑器亮/暗模式（Shift+点击可顺带切换右侧预览主题）">🌙</button>
           <button id="btn-open-md" title="打开 Markdown 文件">📂 打开</button>
           <button id="btn-new-md" title="新建文档">🆕 新建</button>
         </span>
@@ -3608,7 +3655,7 @@
           if (tmb) tmb.style.display = document.querySelector('#preview-content table') ? '' : 'none';
           document.getElementById('doc-title').textContent = currentTitle
             ? `预览: ${currentTitle}`
-            : 'Markdown2Anything 预览';
+            : 'Markdown2Anything ©marsggbo';
           // 应用主题
           if (msg.theme) {
             applyTheme(msg.theme);
@@ -5334,40 +5381,39 @@
 
     // 深色主题（VS Code Dark+ 风格，通过 EditorView.theme 保证覆盖所有高亮类）
     const m2aDarkTheme = EditorView.theme({
-      '&': { backgroundColor: '#1e1e1e', color: '#d4d4d4' },
-      '.cm-scroller': { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", lineHeight: '1.6', color: '#d4d4d4' },
-      '.cm-content': { caretColor: '#fff', padding: '10px 8px' },
-      '.cm-line': { color: '#d4d4d4' },
-      '.cm-cursor': { borderLeftColor: '#fff' },
-      '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': { backgroundColor: '#264f78' },
-      '.cm-activeLine': { backgroundColor: '#2a2a2a' },
-      '.cm-gutters': { backgroundColor: '#1e1e1e', color: '#6e7681', borderRight: '1px solid #2a2a2a' },
-      '.cm-activeLineGutter': { backgroundColor: '#262626' },
-      '.cm-lineNumbers .cm-gutterElement': { color: '#6e7681' },
-      // 语法高亮（VS Code Dark+）
-      '.ͼb': { color: '#569cd6' },        // keyword
-      '.ͼc': { color: '#608b4e' },        // comment
-      '.ͼd': { color: '#ce9178' },        // string
-      '.ͼe': { color: '#b5cea8' },        // number/atom
-      '.ͼf': { color: '#dcdcaa' },        // property
-      '.ͼg': { color: '#d4d4d4' },        // variableName
-      '.ͼh': { color: '#4ec9b0' },        // typeName
-      '.ͼi': { color: '#9cdcfe' },        // function
-      '.ͼj': { color: '#dcdcaa' },        // className
-      '.ͼk': { color: '#c586c0' },        // meta
-      '.ͼm': { color: '#d4d4d4' },        // operator
-      '.ͼn': { color: '#d4d4d4' },        // punctuation
-      '.ͼo': { color: '#d4d4d4' },        // bracket
-      '.ͼr': { color: '#569cd6' },        // heading
-      '.ͼv': { color: '#ce9178' },        // url
-      '.ͼq': { color: '#6a9955' },        // quote
-      // 数字类（markdown 实测：ͼ5=markup、ͼ6=link、ͼ9=strong/em、ͼ7/ͼ8 等）
-      '.ͼ5': { color: '#608b4e' },        // markup 标记
-      '.ͼ6': { color: '#569cd6' },        // link 文本
-      '.ͼ9': { color: '#d4d4d4' },        // 强调文本
-      '.ͼ7': { color: '#c586c0' },        // 强调标记
-      '.ͼ8': { color: '#ce9178' },        // 内联代码
-    }, { dark: true });
+      '&': { backgroundColor: 'var(--m2a-editor-bg)', color: 'var(--m2a-editor-fg)' },
+      '.cm-scroller': { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", lineHeight: '1.6', color: 'var(--m2a-editor-fg)' },
+      '.cm-content': { caretColor: 'var(--m2a-editor-cursor)', padding: '10px 8px' },
+      '.cm-line': { color: 'var(--m2a-editor-fg)' },
+      '.cm-cursor': { borderLeftColor: 'var(--m2a-editor-cursor)' },
+      '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': { backgroundColor: 'var(--m2a-editor-select)' },
+      '.cm-activeLine': { backgroundColor: 'var(--m2a-editor-active)' },
+      '.cm-gutters': { backgroundColor: 'var(--m2a-editor-bg)', color: 'var(--m2a-editor-gutter)', borderRight: '1px solid var(--m2a-editor-border)' },
+      '.cm-activeLineGutter': { backgroundColor: 'var(--m2a-editor-bg2)' },
+      '.cm-lineNumbers .cm-gutterElement': { color: 'var(--m2a-editor-gutter)' },
+      // 语法高亮（跟随亮/暗模式变量）
+      '.ͼb': { color: 'var(--m2a-editor-kw)' },        // keyword
+      '.ͼc': { color: 'var(--m2a-editor-comment)' },   // comment
+      '.ͼd': { color: 'var(--m2a-editor-str)' },       // string
+      '.ͼe': { color: 'var(--m2a-editor-num)' },       // number/atom
+      '.ͼf': { color: 'var(--m2a-editor-fn)' },        // property
+      '.ͼg': { color: 'var(--m2a-editor-fg)' },        // variableName
+      '.ͼh': { color: 'var(--m2a-editor-type)' },      // typeName
+      '.ͼi': { color: 'var(--m2a-editor-var)' },       // function
+      '.ͼj': { color: 'var(--m2a-editor-fn)' },        // className
+      '.ͼk': { color: 'var(--m2a-editor-meta)' },      // meta
+      '.ͼm': { color: 'var(--m2a-editor-fg)' },        // operator
+      '.ͼn': { color: 'var(--m2a-editor-fg)' },        // punctuation
+      '.ͼo': { color: 'var(--m2a-editor-fg)' },        // bracket
+      '.ͼr': { color: 'var(--m2a-editor-kw)' },        // heading
+      '.ͼv': { color: 'var(--m2a-editor-url)' },       // url
+      '.ͼq': { color: 'var(--m2a-editor-quote)' },     // quote
+      '.ͼ5': { color: 'var(--m2a-editor-comment)' },   // markup 标记
+      '.ͼ6': { color: 'var(--m2a-editor-kw)' },        // link 文本
+      '.ͼ9': { color: 'var(--m2a-editor-fg)' },        // 强调文本
+      '.ͼ7': { color: 'var(--m2a-editor-meta)' },      // 强调标记
+      '.ͼ8': { color: 'var(--m2a-editor-str)' },       // 内联代码
+    }, { dark: false });
 
     const LS_KEY = 'm2a:electron:doc';
     const startDoc = localStorage.getItem(LS_KEY) || '';
@@ -5426,6 +5472,23 @@
       localStorage.removeItem(LS_KEY);
       const v = window.__m2a_vscode || window.acquireVsCodeApi();
       v.postMessage({ type: 'editorContentChanged', content: '' });
+    });
+
+    // 编辑器亮/暗模式切换
+    const modeBtn = document.getElementById('btn-editor-mode');
+    const pane = document.getElementById('md-editor-pane');
+    const MODE_KEY = 'm2a:electron:editorMode';
+    function applyEditorMode(mode) {
+      const light = mode === 'light';
+      if (pane) pane.classList.toggle('light', light);
+      if (modeBtn) modeBtn.textContent = light ? '☀️' : '🌙';
+      try { localStorage.setItem(MODE_KEY, mode); } catch (_) {}
+    }
+    try { applyEditorMode(localStorage.getItem(MODE_KEY) === 'light' ? 'light' : 'dark'); } catch (_) {}
+    if (modeBtn) modeBtn.addEventListener('click', (ev) => {
+      const next = pane && pane.classList.contains('light') ? 'dark' : 'light';
+      applyEditorMode(next);
+      showToast(next === 'light' ? '编辑器已切换为亮色模式' : '编辑器已切换为暗色模式', 'success');
     });
 
     window.__m2a_editor_view = view;

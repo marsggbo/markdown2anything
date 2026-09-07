@@ -48,23 +48,46 @@ function saveConfigToDisk() {
 
 // ── Render preview from Markdown file ───────────────────
 
+// 用 Markdown 字符串渲染并发送预览（Electron 编辑器主路径）
+function renderMarkdownFromString(markdown) {
+  try {
+    const { bodyHtml, title, rawMarkdown } = renderMarkdownFromText(markdown);
+    sendRenderedPreview(bodyHtml, title, rawMarkdown);
+  } catch (err) {
+    sendToRenderer('error', { message: err.message });
+  }
+}
+
+// 渲染给定文本的 Markdown（临时文件法，避免 lib 差异）
+function renderMarkdownFromText(text) {
+  const tmpFile = path.join(os.tmpdir(), `m2a_render_${crypto.randomUUID()}.md`);
+  fs.writeFileSync(tmpFile, text || '', 'utf8');
+  const result = renderMarkdown(tmpFile);
+  try { fs.unlinkSync(tmpFile); } catch (_) {}
+  return result;
+}
+
+// 发送渲染结果到预览
+function sendRenderedPreview(bodyHtml, title, rawMarkdown) {
+  const isBlank = !rawMarkdown || !rawMarkdown.trim() || !bodyHtml || !bodyHtml.replace(/<[^>]*>/g, '').trim();
+  if (!isBlank) {
+    lastBodyHtml = bodyHtml;
+    lastRawMarkdown = rawMarkdown;
+  }
+  const theme = getTheme(currentThemeId);
+  sendToRenderer('update', {
+    bodyHtml: isBlank
+      ? '<div style="text-align:center;padding:56px 24px;color:#999;font-size:15px;line-height:1.8;"><div style="font-size:44px;margin-bottom:14px;">✏️</div><div>在左侧编辑器中输入 Markdown 内容</div><div style="font-size:13px;color:#bbb;margin-top:6px;">右侧将实时渲染预览，支持公式、代码、表格、图片</div></div>'
+      : bodyHtml,
+    title,
+    theme: { id: theme.id, css: theme.css, wrapperBg: theme.wrapperBg },
+  });
+}
+
 function renderAndSendPreview(mdPath) {
   try {
     const { bodyHtml, title, rawMarkdown } = renderMarkdown(mdPath);
-    // lastBodyHtml/lastRawMarkdown 始终存真实内容（供复制/发布用），空状态仅用于预览展示
-    const isBlank = !rawMarkdown || !rawMarkdown.trim() || !bodyHtml || !bodyHtml.replace(/<[^>]*>/g, '').trim();
-    if (!isBlank) {
-      lastBodyHtml = bodyHtml;
-      lastRawMarkdown = rawMarkdown;
-    }
-    const theme = getTheme(currentThemeId);
-    sendToRenderer('update', {
-      bodyHtml: isBlank
-        ? '<div style="text-align:center;padding:56px 24px;color:#999;font-size:15px;line-height:1.8;"><div style="font-size:44px;margin-bottom:14px;">✏️</div><div>在左侧编辑器中输入 Markdown 内容</div><div style="font-size:13px;color:#bbb;margin-top:6px;">右侧将实时渲染预览，支持公式、代码、表格、图片</div></div>'
-        : bodyHtml,
-      title,
-      theme: { id: theme.id, css: theme.css, wrapperBg: theme.wrapperBg },
-    });
+    sendRenderedPreview(bodyHtml, title, rawMarkdown);
   } catch (err) {
     sendToRenderer('error', { message: err.message });
   }
@@ -102,7 +125,7 @@ function createWindow() {
     height: 900,
     minWidth: 900,
     minHeight: 600,
-    title: 'Markdown2Anything',
+    title: 'Markdown2Anything ©marsggbo',
     show: !process.env.M2A_HEADLESS,   // 后台测试时不显示窗口
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -226,6 +249,16 @@ ipcMain.on('editorContentChanged', (_event, msg) => {
   }, 10000);
 });
 
+// ── Set theme（切换主题立即重渲染，保证预览实时更新）──
+ipcMain.on('setTheme', (_event, msg) => {
+  currentThemeId = (msg && msg.themeId) || DEFAULT_THEME_ID;
+  if (lastRawMarkdown !== undefined && lastRawMarkdown !== null) {
+    renderMarkdownFromString(lastRawMarkdown);
+  } else if (currentFilePath) {
+    renderAndSendPreview(currentFilePath);
+  }
+});
+
 // ── Ready (renderer loaded) ─────────────────────────────
 
 ipcMain.on('ready', () => {
@@ -248,13 +281,6 @@ ipcMain.on('openExternal', (_event, url) => {
 });
 
 // ── Theme ──────────────────────────────────────────────
-
-ipcMain.on('setTheme', (_event, msg) => {
-  currentThemeId = (msg && msg.themeId) || DEFAULT_THEME_ID;
-  if (currentFilePath) {
-    renderAndSendPreview(currentFilePath);
-  }
-});
 
 // ── Config ─────────────────────────────────────────────
 
