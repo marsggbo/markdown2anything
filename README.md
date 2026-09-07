@@ -139,16 +139,27 @@ AI 把长文拆成串推 thread，每条控制在 280 字内，配图自动按�
 
 ## 🖥️ Electron 桌面版（macOS dmg）
 
-复用同一套网页 UI，额外支持本地文件打开/保存。在本机 macOS 上打包：
+不装 VS Code 也能用桌面应用，**完整复刻插件侧边栏界面**：
+
+- 左侧内置 **Markdown 编辑器**（CodeMirror，支持 🌙 亮 / ☀️ 暗两种配色模式，可一键切换）
+- 右侧完整工具栏：微信 / 知乎 / 小红书 / 推文 / 封面 / 导出
+- 实时预览：输入即渲染，**切换主题立即生效**（14 套主题），公式 / 代码 / 表格 / 图片完整支持
+- 微信、知乎一键复制（带内联样式 HTML，粘贴即用）
+- 小红书 **Playwright 多图导出**（真实浏览器渲染，1080×1440 自动分片）
+- 本地文件打开 / 保存 / 自动记忆
+
+**下载**：[GitHub Releases](https://github.com/marsggbo/markdown2anything/releases) 下载 `Markdown2Anything-4.0.0-arm64.dmg`（Apple Silicon）。
+
+源码打包（本机 macOS）：
 
 ```bash
 npm install                # 安装依赖（含 electron 二进制，需网络）
 npm run electron:dist      # 打包 dmg（Intel）/ Apple Silicon 用 npm run electron:dist:arm64
 ```
 
-产物在 `dist/` 目录（`Markdown2Anything-4.0.0-x64.dmg` 等）。网页版功能在桌面版内全部可用。
+产物在 `dist/` 目录（`Markdown2Anything-4.0.0-arm64.dmg` 等）。
 
-> 网页版与桌面版共用同一套 `web/` 渲染核心与 UI，任何一端的功能改进另一端自动同步。
+> 桌面版与网页版、插件版共用同一套 `web/` 渲染核心与 UI，任何一端的功能改进另一端自动同步。
 
 ---
 
