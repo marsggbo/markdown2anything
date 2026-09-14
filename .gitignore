@@ -9,3 +9,6 @@ dist/
 web/m2a-render.js
 web/vendor/
 web/src/cm-entry.js
+
+# 安全扫描钩子状态
+.mimosa/

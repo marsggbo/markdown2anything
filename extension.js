@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const https = require('https');
+const crypto = require('crypto');
 
 const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtmlByMode, inlineRemoteImages } = require('./lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('./lib/themes');
@@ -283,6 +284,65 @@ function updatePreview(panel, mdPath) {
 // ─────────────────────────────────────────────
 //  处理 webview → extension 消息
 // ─────────────────────────────────────────────
+
+/**
+ * 查找可用的 Chromium 可执行文件（进程内渲染封面/长图用，与 scripts/cover.js 保持一致）
+ */
+function findCoverChromium() {
+  const home = os.homedir();
+
+  // 1. Playwright 管理的 Chromium（python playwright / node playwright 共用缓存）
+  //    注意：macOS 的默认缓存在 ~/Library/Caches/ms-playwright，不是 ~/.cache
+  const cacheDirs = [
+    path.join(home, '.cache', 'ms-playwright'),
+    process.platform === 'darwin' ? path.join(home, 'Library', 'Caches', 'ms-playwright') : null,
+    process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || '', 'ms-playwright') : null,
+  ].filter(Boolean);
+  for (const cacheDir of cacheDirs) {
+    if (!fs.existsSync(cacheDir)) continue;
+    const entries = fs.readdirSync(cacheDir).filter(e => e.startsWith('chromium'));
+    for (const entry of entries) {
+      const candidates = {
+        darwin: path.join(cacheDir, entry, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
+        linux:  path.join(cacheDir, entry, 'chrome-linux', 'chrome'),
+        win32:  path.join(cacheDir, entry, 'chrome-win', 'chrome.exe'),
+      };
+      const p = candidates[process.platform];
+      if (p && fs.existsSync(p)) return p;
+      // 新版 playwright 用 headless shell 也可
+      if (process.platform === 'darwin') {
+        const shell = path.join(cacheDir, entry, 'chrome-headless-shell-mac-arm64', 'chrome-headless-shell');
+        if (fs.existsSync(shell)) return shell;
+        const shellX64 = path.join(cacheDir, entry, 'chrome-headless-shell-mac-x64', 'chrome-headless-shell');
+        if (fs.existsSync(shellX64)) return shellX64;
+      }
+    }
+  }
+
+  // 2. 系统已安装的浏览器
+  const system = {
+    darwin: [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium',
+      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+    ],
+    linux: [
+      '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
+      '/usr/bin/chromium-browser', '/usr/bin/chromium',
+      '/snap/bin/chromium',
+    ],
+    win32: [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    ],
+  };
+  for (const p of (system[process.platform] || [])) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
 
 /**
  * 用 playwright-core CLI 自动安装 Chromium，实时转发进度到 webview
@@ -666,13 +726,12 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const outPath = path.join(dir, `cover_bg_${Date.now()}.png`);
         coverLlm.saveB64ToFile(b64, outPath);
         const dataUrl = `data:image/png;base64,${b64}`;
-        try { coverSaveBgFromDataUrl(dataUrl, 'LLM_'+Date.now()); } catch(_){}
+        try { coverSaveBgFromDataUrl(dataUrl, 'LLM_'+Date.now(), msg.coverType||'xhs'); } catch(_){}
         panel.webview.postMessage({ type: 'coverImageResult', ok: true, dataUrl, outPath });
         // 推送最新历史
         try {
-          const cfg2 = loadCoverConfig();
-          const list2 = cfg2.bgs.map(function(it){ return { id:it.id, name:it.name, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) }; }).filter(function(x){return x.dataUrl;});
-          panel.webview.postMessage({ type:'coverHistory', bgs: list2, defaultBgId: cfg2.defaultBgId, titleState: coverTitleStateByType(cfg2) });
+          const cfg2 = coverEnsurePresets(loadCoverConfig());
+          panel.webview.postMessage(coverHistoryPayload(cfg2, mdPath, msg.coverType));
         } catch(_){}
       } catch (e) {
         // 404 等表示不支持生图，降级为只给 prompt
@@ -682,16 +741,24 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     }
 
     case 'coverGenerate': {
-      // 脚本合成封面：标题 + 背景图 -> 1080x1440 PNG，位置/大小持久化
+      // 合成封面：标题 + 背景图 -> PNG（在扩展宿主内渲染，不再依赖子进程脚本）
       try {
-        const { spawn } = require('child_process');
         const title = (msg.title || '').trim() || readArticleMeta(mdPath).title || '未命名封面';
         let bgDataUrl = msg.bgDataUrl || msg.bg || '';
-        if (!bgDataUrl) {
-          // 未显式传背景时，用当前生效背景（per-md 覆盖优先，其次全局默认）
+        const coverType = msg.coverType || 'xhs';
+        // 优先按 id 从存储解析（webview 与扩展共用同一份文件，避免传大 data URL）
+        if (msg.bgId) {
           try {
             const cfg = coverEnsurePresets(loadCoverConfig());
-            const bid = coverEffectiveBgId(cfg, mdPath);
+            const it = (cfg.bgs || []).find(b => b.id === msg.bgId);
+            if (it) bgDataUrl = coverGetBgDataUrl(it) || '';
+          } catch(_){}
+        }
+        if (!bgDataUrl) {
+          // 未显式传背景时，用当前生效背景（per-md 覆盖优先，其次该规格的全局默认）
+          try {
+            const cfg = coverEnsurePresets(loadCoverConfig());
+            const bid = coverEffectiveBgId(cfg, mdPath, coverType);
             if (bid) {
               const it = cfg.bgs.find(b => b.id === bid);
               if (it) bgDataUrl = coverGetBgDataUrl(it) || '';
@@ -715,43 +782,78 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const outDir = path.join(path.dirname(mdPath), `${base}_cover`);
         if (!fs.existsSync(outDir)) fs.mkdirSync(outDir,{recursive:true});
         // 封面类型 → 输出尺寸（默认小红书 1080×1440）
-        const coverType = msg.type || 'xhs';
         const cw = Number(msg.width) || 1080;
         const ch = Number(msg.height) || 1440;
         const typeTag = coverType === 'xhs' ? '' : `_${coverType}`;
         const outPath = path.join(outDir, `cover${typeTag}_${Date.now()}.png`);
-        const scriptPath = path.join(extContext.extensionUri.fsPath, 'scripts', 'cover.js');
-        const args=[scriptPath, '--title', title, '--out', outPath, '--width', String(cw), '--height', String(ch)];
-        if (bgPath) args.push('--bg', bgPath);
-        if (tagline) args.push('--tagline', tagline);
-        if (msg.titleState) args.push('--titleState', JSON.stringify(msg.titleState));
-        if (bgDataUrl && bgDataUrl.startsWith('http')) args.push('--bg', bgDataUrl);
 
-        const proc = spawn(process.execPath, args, { env: NODE_EXEC_ENV });
-        let stdout='';
-        proc.stdout.on('data', d=>{ stdout+=d.toString(); const l=d.toString().trim(); if(l.startsWith('INFO:')) panel.webview.postMessage({type:'coverProgress', message:l.slice(5)}); });
-        proc.stderr.on('data', d=>{ stdout+=d.toString(); });
-        proc.on('close', async (code)=>{
-          try{ if(bgPath && bgPath.includes(os.tmpdir()) && fs.existsSync(bgPath)) fs.unlinkSync(bgPath);}catch(_){}
-          if (code===2) {
-            panel.webview.postMessage({type:'coverProgress', message:'📥 首次使用，正在下载 Chromium...'});
-            await installChromium(panel);
-            const proc2=spawn(process.execPath, args, { env: NODE_EXEC_ENV });
-            let out2='';
-            proc2.stdout.on('data', d=>{ out2+=d.toString(); });
-            proc2.on('close', c2=>{
-              if(c2!==0){ panel.webview.postMessage({type:'coverResult', ok:false, message: out2.split('\n').find(l=>l.startsWith('ERROR:'))||'封面生成失败'}); return; }
-              const buf=fs.readFileSync(outPath);
-              panel.webview.postMessage({type:'coverResult', ok:true, dataUrl:`data:image/png;base64,${buf.toString('base64')}`, outPath});
-            });
-            return;
-          }
-          if(code!==0){ panel.webview.postMessage({type:'coverResult', ok:false, message: stdout.split('\n').find(l=>l.startsWith('ERROR:'))||'封面生成失败'}); return; }
-          const buf=fs.readFileSync(outPath);
-          panel.webview.postMessage({type:'coverResult', ok:true, dataUrl:`data:image/png;base64,${buf.toString('base64')}`, outPath});
-        });
-        proc.on('error', e=> panel.webview.postMessage({type:'coverResult', ok:false, message:e.message}));
-        panel.webview.postMessage({type:'coverProgress', message:'⏳ 正在合成封面...'});
+        let finished = false;
+        let watchdog = null;
+        let browserRef = null;
+        const cleanupBg = () => { try { if (bgPath && bgPath.includes(os.tmpdir()) && fs.existsSync(bgPath)) fs.unlinkSync(bgPath); } catch(_){} };
+        const finish = (ok, message, dataUrl, out) => {
+          if (finished) return;
+          finished = true;
+          if (watchdog) clearTimeout(watchdog);
+          cleanupBg();
+          if (ok) panel.webview.postMessage({ type: 'coverResult', ok: true, dataUrl, outPath: out });
+          else panel.webview.postMessage({ type: 'coverResult', ok: false, message });
+        };
+        // 看门狗：渲染/下载挂死时兜底报错，避免界面永远停在「正在合成封面」
+        const armWatchdog = (ms) => {
+          if (watchdog) clearTimeout(watchdog);
+          watchdog = setTimeout(() => {
+            try {
+              if (browserRef) { const b = browserRef; browserRef = null; b.close().catch(()=>{}); }
+            } catch(_){}
+            finish(false, '封面合成超时（' + Math.round(ms/1000) + ' 秒），请重试；若持续失败请检查浏览器是否可用');
+          }, ms);
+        };
+        armWatchdog(180000);
+
+        (async () => {
+          try {
+            if (finished) return;
+            const bgImage = bgPath || (bgDataUrl.startsWith('http') ? bgDataUrl : '');
+            const htmlContent = cover.buildCoverHtml({ title: title || '未命名封面', subtitle: 'marsggbo', bgImage, tagline, width: cw, height: ch, titleState: msg.titleState || null });
+            const tmpHtml = path.join(os.tmpdir(), `m2a_cover_${Date.now()}.html`);
+            fs.writeFileSync(tmpHtml, htmlContent, 'utf8');
+
+            let executablePath = findCoverChromium();
+            if (!executablePath) {
+              // 未找到浏览器 → 下载 Chromium 后重试一次
+              if (finished) return;
+              panel.webview.postMessage({type:'coverProgress', message:'📥 首次使用，正在下载 Chromium...'});
+              if (watchdog) clearTimeout(watchdog);
+              await installChromium(panel);
+              if (finished) return;
+              executablePath = findCoverChromium();
+              if (!executablePath) { finish(false, '未找到可用浏览器，请安装 Chrome 或重试「安装 Chromium」后再生成'); return; }
+              armWatchdog(180000);
+            }
+            if (finished) return;
+
+            const { chromium } = require('playwright-core');
+            const browser = await chromium.launch({ executablePath, args:['--no-sandbox','--disable-dev-shm-usage'] });
+            browserRef = browser;
+            let buf = null;
+            try {
+              const page = await browser.newPage({ viewport:{ width: cw, height: ch }, deviceScaleFactor: 2 });
+              await page.goto('file://' + path.resolve(tmpHtml), { waitUntil:'networkidle', timeout:30000 });
+              await page.waitForTimeout(600);
+              // 截图的物理像素是 viewport*scale，需用 clip 限制
+              buf = await page.screenshot({ type:'png', clip:{ x:0, y:0, width: cw, height: ch } });
+            } finally {
+              browserRef = null;
+              try { await browser.close(); } catch(_){}
+              try { if (fs.existsSync(tmpHtml)) fs.unlinkSync(tmpHtml); } catch(_){}
+            }
+            if (finished) return;
+            fs.mkdirSync(path.dirname(outPath), { recursive:true });
+            fs.writeFileSync(outPath, buf);
+            finish(true, '', `data:image/png;base64,${buf.toString('base64')}`, outPath);
+          } catch(e) { finish(false, e.message); }
+        })();
       } catch(e){ panel.webview.postMessage({type:'coverResult', ok:false, message:e.message}); }
       break;
     }
@@ -759,8 +861,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
     case 'coverGetHistory': {
       try {
         const cfg = coverEnsurePresets(loadCoverConfig());
-        const list = cfg.bgs.map(item=> ({ id:item.id, name:item.name, preset:!!item.preset, createdAt:item.createdAt, dataUrl: coverGetBgDataUrl(item) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: coverEffectiveBgId(cfg, mdPath), mdBgId: (cfg.mdBgs&&cfg.mdBgs[mdPath])||null, titleState: coverTitleStateByType(cfg) });
+        panel.webview.postMessage(coverHistoryPayload(cfg, mdPath, msg.coverType));
       } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null, mdBgId:null, titleState: coverTitleStateByType(loadCoverConfig()) }); }
       break;
     }
@@ -768,38 +869,49 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       try {
         const dataUrl = msg.dataUrl;
         if (!dataUrl || !dataUrl.startsWith('data:')) throw new Error('请先选择图片');
-        const { item, cfg } = coverSaveBgFromDataUrl(dataUrl, msg.name||'');
+        const { item, cfg } = coverSaveBgFromDataUrl(dataUrl, msg.name||'', msg.coverType||'xhs');
         // scope=md：仅当前文章用这张背景（覆盖全局默认）
         if (msg.scope === 'md') { cfg.mdBgs[mdPath] = item.id; saveCoverConfig(cfg); }
-        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, preset:!!it.preset, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: coverEffectiveBgId(cfg, mdPath), mdBgId: (cfg.mdBgs&&cfg.mdBgs[mdPath])||null, titleState: coverTitleStateByType(cfg) });
+        panel.webview.postMessage(coverHistoryPayload(cfg, mdPath, msg.coverType));
         panel.webview.postMessage({ type:'coverSaveBgDone', id:item.id, dataUrl: coverGetBgDataUrl(item) });
       } catch(e){ panel.webview.postMessage({ type:'coverSaveBgDone', ok:false, message:e.message }); }
       break;
     }
-    // 统一设置封面背景：scope='global' 写全局默认；scope='md' 仅当前文章（可传 id=null 清除 md 覆盖）
+    // 统一设置封面背景：scope='global' 写当前规格的全局默认；scope='md' 仅当前文章（可传 id=null 清除 md 覆盖）
     case 'coverSetBg': {
       try {
         const cfg = coverEnsurePresets(loadCoverConfig());
+        const coverType = msg.coverType || 'xhs';
         const scope = msg.scope === 'md' ? 'md' : 'global';
         if (scope === 'md') {
           if (msg.id && cfg.bgs.some(b=>b.id===msg.id)) cfg.mdBgs[mdPath] = msg.id;
           else if (!msg.id) delete cfg.mdBgs[mdPath];
         } else {
-          if (msg.id && cfg.bgs.some(b=>b.id===msg.id)) cfg.defaultBgId = msg.id;
+          if (msg.id && cfg.bgs.some(b=>b.id===msg.id)) {
+            cfg.defaultBgId = msg.id;
+            if (!cfg.defaultBgIdByType) cfg.defaultBgIdByType = {};
+            cfg.defaultBgIdByType[coverType] = msg.id;
+            // 全局默认即用户意图，清掉当前文章的覆盖
+            delete cfg.mdBgs[mdPath];
+          }
         }
         saveCoverConfig(cfg);
-        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, preset:!!it.preset, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: coverEffectiveBgId(cfg, mdPath), mdBgId: (cfg.mdBgs&&cfg.mdBgs[mdPath])||null, titleState: coverTitleStateByType(cfg) });
+        panel.webview.postMessage(coverHistoryPayload(cfg, mdPath, coverType));
       } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null, mdBgId:null }); }
       break;
     }
     case 'coverSetDefaultBg': {
       try {
         const cfg = coverEnsurePresets(loadCoverConfig());
-        if (cfg.bgs.some(b=>b.id===msg.id)) { cfg.defaultBgId = msg.id; delete cfg.mdBgs[mdPath]; saveCoverConfig(cfg); }
-        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, preset:!!it.preset, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: coverEffectiveBgId(cfg, mdPath), mdBgId: (cfg.mdBgs&&cfg.mdBgs[mdPath])||null, titleState: coverTitleStateByType(cfg) });
+        const coverType = msg.coverType || 'xhs';
+        if (cfg.bgs.some(b=>b.id===msg.id)) {
+          cfg.defaultBgId = msg.id;
+          if (!cfg.defaultBgIdByType) cfg.defaultBgIdByType = {};
+          cfg.defaultBgIdByType[coverType] = msg.id;
+          delete cfg.mdBgs[mdPath];
+          saveCoverConfig(cfg);
+        }
+        panel.webview.postMessage(coverHistoryPayload(cfg, mdPath, coverType));
       } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null, mdBgId:null }); }
       break;
     }
@@ -812,18 +924,22 @@ async function handleWebviewMessage(msg, panel, mdPath) {
           if (!cfg.bgs[idx].preset) { try{ fs.unlinkSync(cfg.bgs[idx].path); }catch(_){} }
           cfg.bgs.splice(idx,1);
           if (cfg.defaultBgId===msg.id) cfg.defaultBgId = cfg.bgs[0]?.id||null;
+          if (cfg.defaultBgIdByType) {
+            for (const t of Object.keys(cfg.defaultBgIdByType)) {
+              if (cfg.defaultBgIdByType[t]===msg.id) cfg.defaultBgIdByType[t] = cfg.bgs[0]?.id||null;
+            }
+          }
           if (cfg.mdBgs && cfg.mdBgs[mdPath]===msg.id) delete cfg.mdBgs[mdPath];
           saveCoverConfig(cfg);
         }
-        const list = cfg.bgs.map(it=> ({ id:it.id, name:it.name, preset:!!it.preset, createdAt:it.createdAt, dataUrl: coverGetBgDataUrl(it) })).filter(x=>x.dataUrl);
-        panel.webview.postMessage({ type:'coverHistory', bgs: list, defaultBgId: coverEffectiveBgId(cfg, mdPath), mdBgId: (cfg.mdBgs&&cfg.mdBgs[mdPath])||null, titleState: coverTitleStateByType(cfg) });
+        panel.webview.postMessage(coverHistoryPayload(cfg, mdPath, msg.coverType));
       } catch(e){ panel.webview.postMessage({ type:'coverHistory', bgs:[], defaultBgId:null }); }
       break;
     }
     case 'coverSaveTitleState': {
       try {
         const cfg = loadCoverConfig();
-        const type = msg.type || 'xhs';
+        const type = msg.coverType || 'xhs';
         // 归一化：旧版 titleState 是平面对象，视为 xhs 的排版
         const byType = (cfg.titleState && !cfg.titleState.xhs && !cfg.titleState['wx-head'] && !cfg.titleState['wx-thumb'])
           ? { xhs: cfg.titleState }
@@ -1938,15 +2054,15 @@ function loadCoverConfig() {
     const p = getCoverConfigPath();
     if (fs.existsSync(p)) {
       const j = JSON.parse(fs.readFileSync(p, 'utf8'));
-      return { defaultBgId: j.defaultBgId || null, titleState: j.titleState || null, bgs: Array.isArray(j.bgs) ? j.bgs : [], mdBgs: (j.mdBgs && typeof j.mdBgs === 'object') ? j.mdBgs : {} };
+      return { defaultBgId: j.defaultBgId || null, defaultBgIdByType: (j.defaultBgIdByType && typeof j.defaultBgIdByType === 'object') ? j.defaultBgIdByType : {}, titleState: j.titleState || null, bgs: Array.isArray(j.bgs) ? j.bgs : [], mdBgs: (j.mdBgs && typeof j.mdBgs === 'object') ? j.mdBgs : {} };
     }
   } catch(_) {}
-  return { defaultBgId: null, titleState: null, bgs: [], mdBgs: {} };
+  return { defaultBgId: null, defaultBgIdByType: {}, titleState: null, bgs: [], mdBgs: {} };
 }
 function saveCoverConfig(cfg) {
   try {
     ensureCoverStoreDir();
-    fs.writeFileSync(getCoverConfigPath(), JSON.stringify({ defaultBgId: cfg.defaultBgId||null, titleState: cfg.titleState||null, bgs: cfg.bgs||[], mdBgs: cfg.mdBgs||{} }, null, 2)+'\n','utf8');
+    fs.writeFileSync(getCoverConfigPath(), JSON.stringify({ defaultBgId: cfg.defaultBgId||null, defaultBgIdByType: cfg.defaultBgIdByType||{}, titleState: cfg.titleState||null, bgs: cfg.bgs||[], mdBgs: cfg.mdBgs||{} }, null, 2)+'\n','utf8');
   } catch(e){ log('保存封面配置失败: '+e.message); }
 }
 /** 把扩展内置的预设背景注册进 cfg.bgs（带 preset 标记，删除后重启会重新出现） */
@@ -1968,6 +2084,8 @@ function coverEnsurePresets(cfg) {
         'preset-forest':  '墨绿森林',
         'preset-night':   '夜空繁星',
         'preset-mint':    '清新薄荷',
+        'preset-horizon':  '签售会横版',
+        'preset-vertical2': '签售会竖版',
       }[id] || id.replace('preset-','');
       cfg.bgs.push({ id, ext: f.match(/jpe?g$/i) ? 'jpg' : 'png', name, preset: true, presetFile: f, path: path.join(dir, f), createdAt: new Date().toISOString() });
       haveIds.add(id);
@@ -1975,12 +2093,23 @@ function coverEnsurePresets(cfg) {
     }
     // 若无任何默认背景，把第一个预设设为默认
     if (changed && !cfg.defaultBgId && cfg.bgs.length) cfg.defaultBgId = cfg.bgs[0].id;
+    // 旧版配置迁移：默认背景只有一个全局 id。为保证「切换规格时默认背景自动切换」，
+    // 为各规格分配不同的默认：当前默认（用户选择或第一个预设）→ xhs，其余规格轮流用其他预设
+    if (!cfg.defaultBgIdByType) cfg.defaultBgIdByType = {};
+    if (!Object.keys(cfg.defaultBgIdByType).length) {
+      const others = (cfg.bgs || []).filter(b => b.preset && b.id !== cfg.defaultBgId);
+      const cur = cfg.defaultBgId || ((cfg.bgs || [])[0] || {}).id || null;
+      cfg.defaultBgIdByType['xhs'] = cur;
+      cfg.defaultBgIdByType['wx-head'] = (others[0] || {}).id || cur;
+      cfg.defaultBgIdByType['wx-thumb'] = (others[1] || others[0] || {}).id || cur;
+    }
     return cfg;
   } catch(e) { return cfg; }
 }
-/** 当前 mdPath 生效的背景 id：per-md 覆盖优先，其次全局默认 */
-function coverEffectiveBgId(cfg, mdPath) {
+/** 当前 mdPath + 封面规格生效的背景 id：per-md 覆盖优先，其次该规格的全局默认，最后旧版全局默认 */
+function coverEffectiveBgId(cfg, mdPath, coverType) {
   if (mdPath && cfg.mdBgs && cfg.mdBgs[mdPath]) return cfg.mdBgs[mdPath];
+  if (coverType && cfg.defaultBgIdByType && cfg.defaultBgIdByType[coverType]) return cfg.defaultBgIdByType[coverType];
   return cfg.defaultBgId || null;
 }
 /**
@@ -2000,13 +2129,19 @@ function coverTitleStateByType(cfg) {
   return byType;
 }
 function coverBgFilePath(id, ext='png') { return path.join(getCoverStoreDir(), 'bgs', `${id}.${ext}`); }
-function coverSaveBgFromDataUrl(dataUrl, nameHint) {
+/**
+ * 保存背景图并设为指定规格的默认背景
+ * @param {string} dataUrl
+ * @param {string} nameHint
+ * @param {string} [coverType='xhs'] - 封面规格：xhs | wx-head | wx-thumb
+ */
+function coverSaveBgFromDataUrl(dataUrl, nameHint, coverType) {
   ensureCoverStoreDir();
   const m = String(dataUrl).match(/^data:image\/(\w+);base64,(.+)$/);
   if (!m) throw new Error('无效的图片 dataUrl');
   const ext = (m[1]==='jpeg'?'jpg':m[1]);
   const b64 = m[2];
-  const id = Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,6);
+  const id = Date.now().toString(36)+'_'+crypto.randomBytes(4).toString('hex');
   const fp = coverBgFilePath(id, ext);
   fs.writeFileSync(fp, Buffer.from(b64,'base64'));
   let cfg = loadCoverConfig();
@@ -2019,6 +2154,8 @@ function coverSaveBgFromDataUrl(dataUrl, nameHint) {
     for(const o of old) try{ fs.unlinkSync(o.path);}catch(_){}
   }
   cfg.defaultBgId = id;
+  cfg.defaultBgIdByType = cfg.defaultBgIdByType || {};
+  cfg.defaultBgIdByType[coverType || 'xhs'] = id;
   saveCoverConfig(cfg);
   return { item, cfg };
 }
@@ -2030,6 +2167,19 @@ function coverGetBgDataUrl(item) {
     const b64 = fs.readFileSync(item.path).toString('base64');
     return `data:${mime};base64,${b64}`;
   } catch(_){ return null; }
+}
+
+/** 组装发给 webview 的 coverHistory 载荷（默认背景按当前规格解析） */
+function coverHistoryPayload(cfg, mdPath, coverType) {
+  const list = cfg.bgs.map(item => ({ id:item.id, name:item.name, preset:!!item.preset, createdAt:item.createdAt, dataUrl: coverGetBgDataUrl(item) })).filter(x=>x.dataUrl);
+  return {
+    type: 'coverHistory',
+    bgs: list,
+    defaultBgId: coverEffectiveBgId(cfg, mdPath, coverType || 'xhs'),
+    mdBgId: (cfg.mdBgs && cfg.mdBgs[mdPath]) || null,
+    defaultBgIdByType: cfg.defaultBgIdByType || {},
+    titleState: coverTitleStateByType(cfg),
+  };
 }
 
 /** 新增一个版本（旧版本保留，可回切），返回新版本下标 */

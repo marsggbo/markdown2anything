@@ -25,6 +25,8 @@ const FORWARD_CHANNELS = [
   'llmTestResult', 'llmTestProgress', 'llmConfigError',
   'zhihuLoginStatus', 'zhihuCheckResult', 'zhihuArticleId', 'zhihuPublishResult',
   'zhihuSaveDraftResult', 'zhihuQrStatus',
+  'coverProgress', 'coverResult', 'coverPromptResult', 'coverImageResult',
+  'coverHistory', 'coverSaveBgDone', 'coverTitleStateSaved',
   'savePreviewSettingDone',
 ];
 
@@ -48,6 +50,10 @@ const SEND_CHANNELS = [
   'zhihuSaveCookie', 'zhihuLogout', 'zhihuPublish', 'zhihuSaveDraft',
   'llmGetConfig', 'llmSaveConfig', 'llmTestConnection', 'llmFetchFreeModels',
   'llmTestAll', 'llmExportConfig', 'llmImportConfig', 'llmGetProfileKey',
+  // 封面（与 extension 一致的消息名）
+  'coverGeneratePrompt', 'coverGenerateImage', 'coverGenerate',
+  'coverGetHistory', 'coverSaveBg', 'coverSetBg', 'coverSetDefaultBg',
+  'coverDeleteBg', 'coverSaveTitleState',
 ];
 
 // panel.html 顶部会调用 acquireVsCodeApi() 拿到 vscode 对象。
