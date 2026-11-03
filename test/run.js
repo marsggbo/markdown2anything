@@ -34,6 +34,12 @@ function sh(cmd) {
 
 const mode = process.argv[2] || 'all';
 
+function uiEnvironment() {
+  if (process.env.EXE) return process.env;
+  const systemChrome = process.platform === 'darwin' && '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  return systemChrome && fs.existsSync(systemChrome) ? { ...process.env, EXE: systemChrome } : process.env;
+}
+
 if (mode === 'all' || mode === 'syntax') {
   console.log('── 源码语法检查 ──');
   run('extension.js', () => sh('node --check extension.js'));
@@ -87,7 +93,7 @@ if (mode === 'all' || mode === 'ui') {
     run(`ui/${f}`, () => {
       try {
         execSync(`node "${path.join(uiDir, f)}"`, {
-          cwd: root, stdio: 'inherit', encoding: 'utf8', env: { ...process.env },
+          cwd: root, stdio: 'inherit', encoding: 'utf8', env: uiEnvironment(),
         });
       } catch (e) {
         throw new Error(e.message);

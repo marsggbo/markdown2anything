@@ -9,7 +9,8 @@ const crypto = require('crypto');
 
 const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtmlByMode, inlineRemoteImages } = require('./lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('./lib/themes');
-const { createPublishingRuntime, registerVsCodePublishing } = require('./lib/publishing/host-entry');
+const { createPublishingRuntime, registerVsCodePublishing, defaultPublishingOptionSupport } = require('./lib/publishing/host-entry');
+const { migrateLegacyCredential } = require('./lib/publishing/legacy-credentials');
 const { BrowserClient } = require('./lib/publishing/browser-client');
 const { loadBundledProfiles } = require('./lib/publishing/profiles');
 const { SecretStore, validateZhihuCookies } = require('./lib/publishing/secrets');
@@ -44,6 +45,8 @@ const previewPanels = new Map();
 /** Map<mdFilePath, NodeJS.Timeout> */
 const debounceTimers = new Map();
 const publishingPanels = new WeakMap();
+const publishingMigrationBlockedSlots = new Set();
+const publishingBlockedLegacyKeys = new Map();
 
 /** 当前选中的主题 ID（全局，所有预览共享） */
 let currentThemeId = DEFAULT_THEME_ID;
@@ -382,6 +385,7 @@ function getPublishingHandler(panel, mdPath) {
   const zhihuProfile = loadBundledProfiles().find(entry => entry.profile.providerPath === 'zhihu-browser').profile;
   const services = {
     jobRoot: path.join(extContext.globalStorageUri.fsPath, 'publishing', 'jobs'),
+    publishingOptionSupport: defaultPublishingOptionSupport(),
     readDocument: async () => {
       const editor = vscode.window.activeTextEditor;
       if (editor && editor.document.uri.fsPath === mdPath && editor.document.isDirty) return { dirty: true };
@@ -412,6 +416,7 @@ function getPublishingHandler(panel, mdPath) {
         account: target === 'wechat' ? { appId: cfg.get('appid', '') } : target === 'cnblogs' ? { blogId: cfg.get('cnblogs.blogId', ''), blogSlug: cfg.get('cnblogs.blogSlug', '') } : null,
         config: { wechat: { appId: cfg.get('appid', '') } },
         credentialSlots,
+        migrationBlocked: credentialSlots.some(slot => publishingMigrationBlockedSlots.has(slot)),
         getSecret: value => secrets.get(value),
         getCredentialRevision: slot => secrets.getRevision(slot),
       };
@@ -427,6 +432,7 @@ function getPublishingHandler(panel, mdPath) {
         if (slot !== 'publishing.zhihu.browserCookies') return { available: false };
         const result = await browserClient.login({ profile: zhihuProfile });
         await secrets.set(slot, result.cookies);
+        await clearBlockedLegacyPublishingCredential(slot, 're-enroll');
         return { available: true };
       }
       const username = slot === 'publishing.cnblogs.username';
@@ -435,7 +441,10 @@ function getPublishingHandler(panel, mdPath) {
       await secrets.set(slot, value);
       return { available: true };
     },
-    clearCredential: slot => secrets.delete(slot),
+    clearCredential: async slot => {
+      await secrets.delete(slot);
+      await clearBlockedLegacyPublishingCredential(slot, 'clear');
+    },
     openReviewUrl: url => vscode.env.openExternal(vscode.Uri.parse(url)),
   };
   const runtime = createPublishingRuntime(services, { browserClient, browserClientOptions: { execPath: process.execPath, environment: process.env } });
@@ -2136,23 +2145,47 @@ function legacyZhihuCookies(value) {
   } catch (_) { return null; }
 }
 
+async function clearBlockedLegacyPublishingCredential(slot, disposition) {
+  const keys = publishingBlockedLegacyKeys.get(slot);
+  if (!keys) return false;
+  if (disposition !== 'clear' && disposition !== 're-enroll') throw new Error('LEGACY_CREDENTIAL_MIGRATION_REQUIRED');
+  if (disposition === 're-enroll' && !legacyZhihuCookies(await publishingSecrets().get(slot))) throw new Error('LEGACY_CREDENTIAL_MIGRATION_REQUIRED');
+  for (const key of keys) await extContext.globalState.update(key, undefined);
+  publishingBlockedLegacyKeys.delete(slot);
+  publishingMigrationBlockedSlots.delete(slot);
+  return true;
+}
+
 async function migrateLegacyPublishingSecrets() {
   const secrets = publishingSecrets();
   const cfg = vscode.workspace.getConfiguration('markdown2anything');
+  publishingMigrationBlockedSlots.clear();
+  publishingBlockedLegacyKeys.clear();
   const appSecret = cfg.get('appSecret', '');
   if (typeof appSecret === 'string' && appSecret) {
     await secrets.set('publishing.wechat.appSecret', appSecret);
     if (await secrets.get('publishing.wechat.appSecret') !== appSecret) throw new Error('SECURE_STORAGE_UNAVAILABLE');
     await cfg.update('appSecret', undefined, vscode.ConfigurationTarget.Global);
   }
+  const slot = 'publishing.zhihu.browserCookies';
   for (const key of ['zhihu.browserCookies', 'zhihu.cookieString']) {
     const legacy = extContext.globalState.get(key, undefined);
-    const cookies = legacyZhihuCookies(legacy);
-    if (!cookies) continue;
-    await secrets.set('publishing.zhihu.browserCookies', cookies);
-    if (await secrets.get('publishing.zhihu.browserCookies') !== cookies) throw new Error('SECURE_STORAGE_UNAVAILABLE');
-    await extContext.globalState.update(key, undefined);
+    const migration = await migrateLegacyCredential({
+      value: legacy,
+      normalize: legacyZhihuCookies,
+      slot,
+      setSecret: (name, value) => secrets.set(name, value),
+      getSecret: name => secrets.get(name),
+      clearLegacy: () => extContext.globalState.update(key, undefined),
+    });
+    if (migration.blocked) {
+      publishingMigrationBlockedSlots.add(slot);
+      const keys = publishingBlockedLegacyKeys.get(slot) || [];
+      keys.push(key);
+      publishingBlockedLegacyKeys.set(slot, keys);
+    }
   }
+  return { blockedSlots: [...publishingMigrationBlockedSlots] };
 }
 
 /** 将仍受支持的小红书和 Twitter Cookie 迁入 SecretStorage。 */

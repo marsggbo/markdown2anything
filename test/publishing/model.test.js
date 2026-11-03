@@ -10,4 +10,12 @@ assert.notStrictEqual(duplicate.assets[0].assetId, duplicate.assets[1].assetId);
 const hash = calculateContentHash(job); job.updatedAt = '2099-01-01T00:00:00.000Z'; assert.strictEqual(hash, calculateContentHash(job));
 job.targets.zhihu.state = 'readyForReview'; job.targets.wechat.state = 'failed'; assert.deepStrictEqual(aggregateJob(job), { state: 'partial', summary: 'partialRetryable' });
 assert.throws(() => assertPersistable({ token: 'secret' }), /SECRET_PERSISTENCE_FORBIDDEN/);
+const unsafeReference = createPublishJob({
+  ...jobInput(), jobId: 'job-model-unsafe-001',
+  targets: { zhihu: { assetResults: { 'asset-0000': { state: 'uploaded', providerRef: 'https://cdn.example/image.png?signature=secret-value', confirmedUrl: 'https://cdn.example/image.png?signature=secret-value' } } } },
+});
+const unsafeResult = unsafeReference.targets.zhihu.assetResults['asset-0000'];
+assert.strictEqual(unsafeResult.providerRef, null);
+assert.strictEqual(unsafeResult.confirmedUrl, null);
+assert.ok(!JSON.stringify(unsafeReference).includes('secret-value'));
 console.log('✓ publishing model');

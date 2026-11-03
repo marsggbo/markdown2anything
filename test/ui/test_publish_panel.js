@@ -13,11 +13,17 @@ const { buildTestHtml } = require('../helpers/webview');
     await page.evaluate(() => document.getElementById('btn-publish').click());
     assert.strictEqual(await page.locator('#publish-controls-root input[type=password]').count(), 0, 'credentials do not enter the shared renderer');
     await page.fill('#publish-title', 'Shared publishing test');
+    await page.locator('#publish-controls-root details').nth(1).locator('summary').click();
+    await page.check('#publish-wechat-comments');
+    assert.strictEqual(await page.isDisabled('#publish-zhihu-topics'), true, 'browser-only Zhihu path must gate unsupported options');
+    assert.match(await page.textContent('#publish-option-zhihu-topics-status'), /不支持\/待配置/);
     await page.click('#publish-preflight');
     const preflight = await page.evaluate(() => window.__posted.find(message => message.type === 'publishPreflight'));
     assert.deepStrictEqual(preflight.targets, ['wechat', 'zhihu', 'cnblogs']);
     assert.strictEqual(preflight.mode, 'prepare');
     assert.strictEqual(preflight.autoAcknowledged, false);
+    assert.deepStrictEqual(preflight.options.wechat, { comments: { enabled: true } }, 'supported WeChat comments option reaches the request');
+    assert.deepStrictEqual(preflight.options.zhihu, {}, 'unsupported browser-only Zhihu options are omitted');
     assert.strictEqual(preflight.options.zhihu.creationDeclaration, undefined);
 
     await page.locator('#publish-controls-root details').first().locator('summary').click();
@@ -42,9 +48,9 @@ const { buildTestHtml } = require('../helpers/webview');
         { assetId: 'asset-0002', role: 'body', acquisition: 'pending' },
       ],
       capabilities: {
-        wechat: { availability: 'available', autoSupported: true },
-        zhihu: { availability: 'available', autoSupported: true },
-        cnblogs: { availability: 'available', autoSupported: true },
+        wechat: { availability: 'available', autoSupported: true, supportedOptions: ['comments'] },
+        zhihu: { availability: 'available', autoSupported: true, supportedOptions: [] },
+        cnblogs: { availability: 'available', autoSupported: true, supportedOptions: [] },
       },
       preflightBinding: { nonce: 'a'.repeat(16), sourceFingerprint: 'b'.repeat(64), expiresAt: new Date(Date.now() + 60000).toISOString(), targets: ['wechat', 'zhihu', 'cnblogs'] },
     } })));

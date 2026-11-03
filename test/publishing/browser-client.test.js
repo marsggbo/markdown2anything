@@ -1,7 +1,7 @@
 'use strict';
 const assert = require('assert');
 const { EventEmitter } = require('events');
-const { BrowserClient, sanitizedWorkerEnvironment } = require('../../lib/publishing/browser-client');
+const { BrowserClient, sanitizedWorkerEnvironment, sanitizeResult } = require('../../lib/publishing/browser-client');
 
 (async () => {
   const sent = []; let spawnOptions;
@@ -26,5 +26,6 @@ const { BrowserClient, sanitizedWorkerEnvironment } = require('../../lib/publish
   const blocked = new BrowserClient({ readyTimeoutMs: 5, fork: () => silent });
   await assert.rejects(blocked.start(), error => error.code === 'WORKER_HANDSHAKE_FAILED');
   assert.deepStrictEqual(sanitizedWorkerEnvironment({ PATH: '/bin', TOKEN: 'secret' }), { PATH: '/bin', ELECTRON_RUN_AS_NODE: '1' });
+  assert.throws(() => sanitizeResult({ ready: false, assetResults: { 'asset-0000': { state: 'uploaded', confirmedUrl: 'https://pic.zhimg.com/a.png?token=secret', providerRef: 'https://pic.zhimg.com/a.png?token=secret' } } }), /BROWSER_PREPARE_FAILED/);
   console.log('✓ publishing browser client');
 })().catch(error => { console.error(error); process.exit(1); });

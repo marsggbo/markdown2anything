@@ -16,6 +16,7 @@
   let currentJobId = null;
   let preflightBinding = null;
   let cover = { kind: 'none' };
+  let optionSupport = { wechat: ['comments'], zhihu: [], cnblogs: [] };
 
   function post(message) {
     const vscode = window.__m2a_vscode || (window.acquireVsCodeApi && window.acquireVsCodeApi());
@@ -40,19 +41,23 @@
     auto.disabled = true;
     confirm.disabled = true;
   }
+  function optionEnabled(target, field) { return Array.isArray(optionSupport[target]) && optionSupport[target].includes(field); }
   function options() {
+    const result = { wechat: {}, zhihu: {}, cnblogs: {} };
     const topics = byId('publish-zhihu-topics').value.split(/\n|,/).map(value => value.trim()).filter(Boolean);
     const categories = byId('publish-cnblogs-categories').value.split(',').map(value => value.trim()).filter(Boolean);
     const tags = byId('publish-cnblogs-tags').value.split(',').map(value => value.trim()).filter(Boolean);
-    return {
-      wechat: { comments: { enabled: byId('publish-wechat-comments').checked } },
-      zhihu: {
-        topics,
-        tableOfContents: byId('publish-zhihu-toc').checked,
-        creationDeclaration: byId('publish-zhihu-declaration').checked ? 'original' : undefined,
-      },
-      cnblogs: { categories, tags, allowComments: byId('publish-cnblogs-comments').checked },
-    };
+    if (optionEnabled('wechat', 'comments')) result.wechat.comments = { enabled: byId('publish-wechat-comments').checked };
+    if (optionEnabled('wechat', 'original') && byId('publish-wechat-original').checked) result.wechat.original = { kind: 'original' };
+    if (optionEnabled('wechat', 'repost') && byId('publish-wechat-repost').checked) result.wechat.repost = { kind: 'repost' };
+    if (optionEnabled('zhihu', 'commentPermission')) result.zhihu.commentPermission = byId('publish-zhihu-comment-permission').value;
+    if (optionEnabled('zhihu', 'topics') && topics.length) result.zhihu.topics = topics;
+    if (optionEnabled('zhihu', 'tableOfContents')) result.zhihu.tableOfContents = byId('publish-zhihu-toc').checked;
+    if (optionEnabled('zhihu', 'creationDeclaration') && byId('publish-zhihu-declaration').value) result.zhihu.creationDeclaration = byId('publish-zhihu-declaration').value;
+    if (optionEnabled('cnblogs', 'categories') && categories.length) result.cnblogs.categories = categories;
+    if (optionEnabled('cnblogs', 'tags') && tags.length) result.cnblogs.tags = tags;
+    if (optionEnabled('cnblogs', 'allowComments')) result.cnblogs.allowComments = byId('publish-cnblogs-comments').checked;
+    return result;
   }
   function metadata() {
     return {
@@ -91,7 +96,32 @@
     });
     if (aggregate && (aggregate.state === 'partial' || aggregate.summary === 'partialRetryable')) showStatus('部分平台已完成，请检查失败项后重试。', 'partial');
   }
+  function updateOptionControls(capabilities) {
+    const controls = [
+      ['wechat', 'comments', ['publish-wechat-comments']],
+      ['wechat', 'original', ['publish-wechat-original']],
+      ['wechat', 'repost', ['publish-wechat-repost']],
+      ['zhihu', 'commentPermission', ['publish-zhihu-comment-permission']],
+      ['zhihu', 'topics', ['publish-zhihu-topics']],
+      ['zhihu', 'tableOfContents', ['publish-zhihu-toc']],
+      ['zhihu', 'creationDeclaration', ['publish-zhihu-declaration']],
+      ['cnblogs', 'categories', ['publish-cnblogs-categories']],
+      ['cnblogs', 'tags', ['publish-cnblogs-tags']],
+      ['cnblogs', 'allowComments', ['publish-cnblogs-comments']],
+    ];
+    ['wechat', 'zhihu', 'cnblogs'].forEach(target => {
+      const capability = capabilities && capabilities[target] || {};
+      optionSupport[target] = Array.isArray(capability.supportedOptions) ? capability.supportedOptions.slice() : [];
+    });
+    controls.forEach(([target, field, ids]) => {
+      const supported = optionEnabled(target, field);
+      ids.forEach(id => { const element = byId(id); if (element) element.disabled = !supported; });
+      const note = byId(`publish-option-${target}-${field}-status`);
+      if (note) note.textContent = supported ? '' : '（不支持/待配置）';
+    });
+  }
   function updateCapability(capabilities) {
+    updateOptionControls(capabilities);
     const list = clearList('publish-capabilities');
     const targets = selectedTargets();
     let autoReady = targets.length > 0;
@@ -158,13 +188,16 @@
         <p class="hint" id="publish-credential-status">凭证仅在主机安全存储中输入和保存。</p>
       </details>
       <details class="publish-section"><summary>平台选项</summary>
-        <label><input id="publish-wechat-comments" type="checkbox"> 允许微信评论</label>
-        <label>知乎话题（最多三个，每行一个）<textarea id="publish-zhihu-topics" placeholder="https://www.zhihu.com/topic/..."></textarea></label>
-        <label><input id="publish-zhihu-toc" type="checkbox"> 知乎显示目录</label>
-        <label><input id="publish-zhihu-declaration" type="checkbox"> 我确认内容为原创</label>
-        <label>博客园分类（逗号分隔）<input id="publish-cnblogs-categories" type="text"></label>
-        <label>博客园标签（逗号分隔）<input id="publish-cnblogs-tags" type="text"></label>
-        <label><input id="publish-cnblogs-comments" type="checkbox"> 允许博客园评论</label>
+        <label> <input id="publish-wechat-comments" type="checkbox"> 允许微信评论 <span id="publish-option-wechat-comments-status"></span></label>
+        <label><input id="publish-wechat-original" type="checkbox" disabled> 微信原创标记 <span id="publish-option-wechat-original-status">（不支持/待配置）</span></label>
+        <label><input id="publish-wechat-repost" type="checkbox" disabled> 微信转载标记 <span id="publish-option-wechat-repost-status">（不支持/待配置）</span></label>
+        <label>知乎评论权限 <select id="publish-zhihu-comment-permission" disabled><option value="all">任何人都可以评论</option><option value="nobody">不允许评论</option><option value="followee">我关注的人能评论</option><option value="censor">仅显示我筛选后的评论</option><option value="follower">关注我的人能评论</option></select> <span id="publish-option-zhihu-commentPermission-status">（不支持/待配置）</span></label>
+        <label>知乎话题（最多三个，每行一个）<textarea id="publish-zhihu-topics" placeholder="https://www.zhihu.com/topic/..." disabled></textarea> <span id="publish-option-zhihu-topics-status">（不支持/待配置）</span></label>
+        <label><input id="publish-zhihu-toc" type="checkbox" disabled> 知乎显示目录 <span id="publish-option-zhihu-tableOfContents-status">（不支持/待配置）</span></label>
+        <label>知乎创作声明 <select id="publish-zhihu-declaration" disabled><option value="">不设置</option><option value="spoiler">包含剧透</option><option value="medical_advice">包含医疗建议</option><option value="fictional_creation">虚构创作</option><option value="contain_finance">包含理财内容</option><option value="ai_creation">包含 AI 辅助创作，作者对内容负责</option></select> <span id="publish-option-zhihu-creationDeclaration-status">（不支持/待配置）</span></label>
+        <label>博客园分类（逗号分隔）<input id="publish-cnblogs-categories" type="text" disabled> <span id="publish-option-cnblogs-categories-status">（不支持/待配置）</span></label>
+        <label>博客园标签（逗号分隔）<input id="publish-cnblogs-tags" type="text" disabled> <span id="publish-option-cnblogs-tags-status">（不支持/待配置）</span></label>
+        <label><input id="publish-cnblogs-comments" type="checkbox" disabled> 允许博客园评论 <span id="publish-option-cnblogs-allowComments-status">（不支持/待配置）</span></label>
       </details>
       <div class="publish-section">
         <div class="panel-actions"><button class="btn btn-primary" id="publish-preflight">最终检查</button><button class="btn btn-primary" id="publish-prepare">准备草稿</button></div>
