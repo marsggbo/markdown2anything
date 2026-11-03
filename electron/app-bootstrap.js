@@ -8,8 +8,6 @@ const { createPublishingRuntime, registerElectronPublishing } = require('../lib/
 const { BrowserClient } = require('../lib/publishing/browser-client');
 const { loadBundledProfiles } = require('../lib/publishing/profiles');
 const { SecretStore, validateZhihuCookies } = require('../lib/publishing/secrets');
-const { migrateLegacyCredential } = require('../lib/publishing/legacy-credentials');
-const { defaultPublishingOptionSupport } = require('../lib/publishing/host-entry');
 const { sha256 } = require('../lib/publishing/model');
 const { renderMarkdown, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml } = require('../lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('../lib/themes');
@@ -102,20 +100,14 @@ function createElectronSecretStore({ userData, safeStorage, fileSystem = fs }) {
 
 async function migrateElectronSecrets({ userData, safeStorage, configPath, cookiePath, fileSystem = fs }) {
   const secure = createElectronSecretStore({ userData, safeStorage, fileSystem });
-  if (!secure.available) return { ...secure, migrated: false, migrationBlockedSlots: [] };
+  if (!secure.available) return { ...secure, migrated: false };
   const config = readJson(configPath, {});
   const writes = [];
   if (typeof config.appSecret === 'string' && config.appSecret) writes.push(['publishing.wechat.appSecret', config.appSecret]);
   let cookie = null;
   try { cookie = fileSystem.readFileSync(cookiePath, 'utf8'); } catch (_) {}
-  const cookieMigration = await migrateLegacyCredential({
-    value: cookie,
-    normalize: legacyCookieValue,
-    slot: 'publishing.zhihu.browserCookies',
-    setSecret: (slot, value) => secure.store.set(slot, value),
-    getSecret: slot => secure.store.get(slot),
-    clearLegacy: () => { if (fileSystem.existsSync(cookiePath)) fileSystem.unlinkSync(cookiePath); },
-  });
+  const normalizedCookie = legacyCookieValue(cookie);
+  if (normalizedCookie) writes.push(['publishing.zhihu.browserCookies', normalizedCookie]);
   for (const [slot, value] of writes) {
     await secure.store.set(slot, value);
     if (await secure.store.get(slot) !== value) throw bootstrapError('SECURE_STORAGE_UNAVAILABLE');
@@ -124,20 +116,8 @@ async function migrateElectronSecrets({ userData, safeStorage, configPath, cooki
     delete config.appSecret;
     atomicWriteVerified(configPath, JSON.stringify(config, null, 2) + '\n', 0o600);
   }
-  const migrationBlockedSlots = cookieMigration.blocked ? ['publishing.zhihu.browserCookies'] : [];
-  async function clearLegacyCredential(slot, disposition) {
-    if (!migrationBlockedSlots.includes(slot)) return false;
-    if (disposition === 're-enroll') {
-      const value = await secure.store.get(slot);
-      if (!legacyCookieValue(value)) throw bootstrapError('LEGACY_CREDENTIAL_MIGRATION_REQUIRED');
-    } else if (disposition !== 'clear') {
-      throw bootstrapError('LEGACY_CREDENTIAL_MIGRATION_REQUIRED');
-    }
-    if (fileSystem.existsSync(cookiePath)) fileSystem.unlinkSync(cookiePath);
-    migrationBlockedSlots.splice(migrationBlockedSlots.indexOf(slot), 1);
-    return true;
-  }
-  return { ...secure, migrated: writes.length > 0 || cookieMigration.migrated, migrationBlockedSlots, clearLegacyCredential };
+  if (normalizedCookie && fileSystem.existsSync(cookiePath)) fileSystem.unlinkSync(cookiePath);
+  return { ...secure, migrated: writes.length > 0 };
 }
 
 function createElectronPublishingServices(options) {
@@ -185,7 +165,6 @@ function createElectronPublishingServices(options) {
   }
   return {
     jobRoot: path.join(userData, PUBLISHING_DIR, 'jobs'),
-    publishingOptionSupport: defaultPublishingOptionSupport(),
     publishAvailable: secure.available,
     readDocument: async () => currentDocument(),
     chooseCoverFile,
@@ -198,7 +177,6 @@ function createElectronPublishingServices(options) {
         account: target === 'wechat' ? { appId: publishConfig().wechat.appId } : target === 'cnblogs' ? publishConfig().cnblogs : null,
         config: publishConfig(),
         credentialSlots: slots,
-        migrationBlocked: Array.isArray(secure.migrationBlockedSlots) && secure.migrationBlockedSlots.some(slot => slots.includes(slot)),
         getSecret: slot => secretStore.get(slot),
         getCredentialRevision: slot => secretStore.getRevision(slot),
       };
@@ -214,13 +192,9 @@ function createElectronPublishingServices(options) {
         : await promptCredential(slot);
       if (!value) return { available: false };
       await secretStore.set(slot, value);
-      if (secure.clearLegacyCredential) await secure.clearLegacyCredential(slot, 're-enroll');
       return { available: true };
     },
-    clearCredential: async slot => {
-      await secretStore.delete(slot);
-      if (secure.clearLegacyCredential) await secure.clearLegacyCredential(slot, 'clear');
-    },
+    clearCredential: slot => secretStore.delete(slot),
     openReviewUrl: url => shell.openExternal(url),
     rememberSavedDocument(content) {
       state.savedDocumentHash = sha256(content);

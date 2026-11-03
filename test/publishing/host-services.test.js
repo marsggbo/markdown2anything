@@ -28,8 +28,6 @@ function runtime(calls) {
     await registration.dispatch(message);
     assert.strictEqual(events[0].type, 'publishPreflightResult');
     assert.strictEqual(events[0].jobId, 'publish-job-0001');
-    await registration.dispatch({ type: 'publishPreflight', targets: ['zhihu'], mode: 'prepare', autoAcknowledged: false, metadata: { cover: { kind: 'none' } }, options: { zhihu: { topics: ['https://www.zhihu.com/topic/19555547/hot'] } } });
-    assert.strictEqual(events.at(-1).type, 'publishError', 'unsupported browser option must be rejected at the host boundary');
     await registration.dispatch({ type: 'publishCreateDuplicate', jobId: 'publish-job-0001' });
     await registration.dispatch({ type: 'publishFinalizePartial', jobId: 'publish-job-0002', targets: ['zhihu'] });
     await registration.dispatch({ type: 'publishDiscard', jobId: 'publish-job-0002' });

@@ -5,11 +5,8 @@
   "evidence": { "id": "wechat-official-api", "url": "https://developers.weixin.qq.com/doc/service/api/" },
   "draftSupported": true,
   "autoSupported": false,
-  "limits": { "titleCodePoints": 32, "authorCodePoints": 16, "digestCodePoints": 120, "maxHtmlBytes": 1048576, "maxConfirmedUrlBytes": 2048, "acceptedMimes": ["image/jpeg", "image/png", "image/gif", "image/webp"], "maxAssetBytes": 8388608 },
+  "limits": { "titleCodePoints": 32, "authorCodePoints": 16, "digestCodePoints": 120, "maxHtmlBytes": 1048576, "acceptedMimes": ["image/jpeg", "image/png", "image/gif", "image/webp"], "maxAssetBytes": 8388608 },
   "supportedFields": ["title", "author", "digest", "body", "cover", "comments"],
-  "optionMappings": {
-    "comments": { "requestField": "articles[0].need_open_comment" }
-  },
   "routes": {
     "accessToken": { "method": "GET", "origin": "https://api.weixin.qq.com", "path": "/cgi-bin/token", "timeoutMs": 10000, "maxResponseBytes": 1048576, "retry": "never-after-response-loss", "query": { "grant_type": { "literal": "client_credential" }, "appid": { "source": "config.wechat.appId" }, "secret": { "secretSlot": "publishing.wechat.appSecret" } }, "response": { "token": "$.access_token", "errorCode": "$.errcode" }, "success": { "errorCode": "absent-or-zero", "required": ["token:nonEmptyString"] } },
     "inlineImage": { "method": "POST", "origin": "https://api.weixin.qq.com", "path": "/cgi-bin/media/uploadimg", "timeoutMs": 10000, "maxResponseBytes": 1048576, "retry": "never-after-response-loss", "acceptedMimes": ["image/jpeg", "image/png", "image/gif", "image/webp"], "maxAssetBytes": 8388608, "query": { "access_token": { "source": "runtime.accessToken" } }, "multipart": { "media": { "source": "asset.cachePath", "filename": "asset.filename", "contentType": "asset.mime" } }, "response": { "url": "$.url", "errorCode": "$.errcode" }, "success": { "errorCode": "absent-or-zero", "required": ["url:absoluteHttps"] } },

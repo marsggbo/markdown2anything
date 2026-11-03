@@ -10,8 +10,6 @@ function job() {
   return createPublishJob({ jobId: 'job-zhihu-browser-001', source: { documentPath: '/tmp/article.md', documentSha256: 'a'.repeat(64) }, selectedTargets: ['zhihu'], article: { title: 'Exact title', body: { plainText: 'Before middle after', segments: [{ kind: 'text', value: 'Before ' }, { kind: 'asset', assetId: 'asset-0000' }, { kind: 'text', value: ' middle ' }, { kind: 'asset', assetId: 'asset-0001' }, { kind: 'text', value: ' after ' }, { kind: 'asset', assetId: 'asset-0002' }] } }, assets });
 }
 (async () => {
-  const blocked = new ZhihuBrowserAdapter(profile, { browserClient: { prepare: async () => { throw new Error('must not start'); } } });
-  assert.strictEqual((await blocked.preflight({ migrationBlocked: true, credentials: { browserCookies: cookies } })).error.code, 'LEGACY_CREDENTIAL_MIGRATION_REQUIRED');
   const requests = [];
   const failedMiddle = new ZhihuBrowserAdapter(profile, { browserClient: { prepare: async request => {
     requests.push(request);
@@ -35,9 +33,5 @@ function job() {
     return { ready: true, assetResults: results, verification: { title: 'Exact title', body: expectedBody(readyJob.article, readyJob.assets, results), imageUrls: urls, pasteComplete: true, uploadError: false } };
   } } });
   assert.strictEqual((await ready.prepare({ job: readyJob, credentials: { browserCookies: cookies } })).state, 'readyForReview');
-  const unsafeReference = new ZhihuBrowserAdapter(profile, { browserClient: { prepare: async () => ({ ready: false, assetResults: { 'asset-0000': { state: 'uploaded', confirmedUrl: 'https://pic.zhimg.com/one.png?signature=secret', providerRef: 'https://pic.zhimg.com/one.png?signature=secret' } } }) } });
-  const unsafe = await unsafeReference.prepare({ job: job(), credentials: { browserCookies: cookies } });
-  assert.strictEqual(unsafe.assetResults['asset-0000'].state, 'failed');
-  assert.ok(!JSON.stringify(unsafe).includes('signature=secret'));
   console.log('✓ publishing Zhihu browser');
 })().catch(error => { console.error(error); process.exit(1); });

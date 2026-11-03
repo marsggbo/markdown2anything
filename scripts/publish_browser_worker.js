@@ -5,7 +5,6 @@ const { chromium } = require('playwright-core');
 const cheerio = require('cheerio');
 const { requireAvailable } = require('../lib/publishing/profiles');
 const { validateZhihuCookies } = require('../lib/publishing/secrets');
-const { safeProviderRef, safeProviderUrl } = require('../lib/publishing/model');
 const { serializeZhihuBrowser, isZhihuImage } = require('../lib/publishing/serializers/zhihu-browser');
 
 let cookies = null;
@@ -74,8 +73,8 @@ async function uploadGroup(page, profile, group) {
   } catch (_) { throw workerError('ASSET_UPLOAD_FAILED'); }
   if (await hasUploadFailure(page, profile.selectors.uploadFailure)) throw workerError('ASSET_UPLOAD_FAILED');
   const after = await editorImageUrls(page, profile.selectors.contentImages);
-  const url = after.find(value => !before.includes(value) && isZhihuImage(value) && safeProviderUrl(value));
-  if (!url || !safeProviderRef(url)) throw workerError('ASSET_UPLOAD_FAILED');
+  const url = after.find(value => !before.includes(value) && isZhihuImage(value));
+  if (!url) throw workerError('ASSET_UPLOAD_FAILED');
   return url;
 }
 

@@ -58,24 +58,6 @@ function fakeSafeStorage(backend) {
     if (await secure.store.get('publishing.cnblogs.username') !== 'user') throw new Error('host credential was not securely stored');
     const configText = fs.readFileSync(configPath, 'utf8');
     if (configText.includes('migration-value') || configText.includes('migration-cookie') || configText.includes('browser-cookie')) throw new Error('secret leaked to config');
-
-    const blockedRoot = path.join(root, 'blocked-migration');
-    fs.mkdirSync(blockedRoot);
-    const blockedConfigPath = path.join(blockedRoot, 'config.json');
-    const blockedCookiePath = path.join(blockedRoot, 'zhihu-cookie.txt');
-    fs.writeFileSync(blockedConfigPath, '{}', 'utf8');
-    fs.writeFileSync(blockedCookiePath, 'not-a-valid-cookie', 'utf8');
-    const blockedSecure = await migrateElectronSecrets({ userData: blockedRoot, safeStorage: fakeSafeStorage(), configPath: blockedConfigPath, cookiePath: blockedCookiePath });
-    if (!blockedSecure.migrationBlockedSlots.includes('publishing.zhihu.browserCookies')) throw new Error('unrepresentable legacy cookie did not block Zhihu publishing');
-    if (!fs.existsSync(blockedCookiePath)) throw new Error('unrepresentable legacy cookie was deleted');
-    const blockedState = { currentFilePath: articlePath, documentDirty: false, savedDocumentHash: sha256(article), config: {}, mainWindow: null };
-    const blockedServices = createElectronPublishingServices({
-      state: blockedState, dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) }, shell: { openExternal: () => {} }, secure: blockedSecure, configPath: blockedConfigPath, userData: blockedRoot,
-      browserLogin: async () => JSON.stringify([{ name: 'z_c0', value: 'replacement-cookie', domain: '.zhihu.com', path: '/', expires: -1 }]),
-    });
-    if (!(await blockedServices.getTargetContext('zhihu')).migrationBlocked) throw new Error('blocked legacy cookie still enabled the Zhihu target');
-    if (!(await blockedServices.requestCredentialEntry('publishing.zhihu.browserCookies', 'publishBeginBrowserLogin')).available) throw new Error('Zhihu re-enrollment was unavailable');
-    if (fs.existsSync(blockedCookiePath) || (await blockedServices.getTargetContext('zhihu')).migrationBlocked) throw new Error('verified Zhihu re-enrollment did not resolve the migration block');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

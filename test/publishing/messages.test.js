@@ -1,15 +1,10 @@
 'use strict';
 const assert = require('assert');
 const { validatePublishMessage, validatePublishEvent, createCoverSelection, coverSelectionUsable } = require('../../lib/publishing/messages');
-const start = { type: 'publishStart', targets: ['zhihu'], mode: 'prepare', autoAcknowledged: false, metadata: { cover: { kind: 'none' } }, options: { zhihu: {} } };
+const start = { type: 'publishStart', targets: ['zhihu'], mode: 'prepare', autoAcknowledged: false, metadata: { cover: { kind: 'none' } }, options: { zhihu: { topics: [] } } };
 assert.ok(validatePublishMessage(start).ok);
 assert.ok(!validatePublishMessage({ ...start, targets: ['zhihu', 'zhihu'] }).ok);
 assert.ok(!validatePublishMessage({ ...start, options: { zhihu: { topics: ['https://www.zhihu.com/topic/a', 'https://www.zhihu.com/topic/b', 'https://www.zhihu.com/topic/c', 'https://www.zhihu.com/topic/d'] } } }).ok);
-const officialOptionSupport = { zhihu: ['commentPermission', 'topics', 'tableOfContents', 'creationDeclaration'] };
-const zhihuOfficialOptions = { commentPermission: 'all', topics: ['https://www.zhihu.com/topic/19555547/hot'], tableOfContents: true, creationDeclaration: 'ai_creation' };
-assert.ok(!validatePublishMessage({ ...start, options: { zhihu: zhihuOfficialOptions } }).ok, 'the browser provider must reject unsupported Zhihu options');
-assert.ok(validatePublishMessage({ ...start, options: { zhihu: zhihuOfficialOptions } }, { optionSupport: officialOptionSupport }).ok, 'the official provider contract accepts its mapped options');
-assert.ok(!validatePublishMessage({ ...start, targets: ['wechat'], options: { wechat: { original: { kind: 'original' } } } }).ok, 'unmapped WeChat originality settings are rejected');
 assert.ok(!validatePublishMessage({ ...start, mode: 'auto', autoAcknowledged: true }).ok, 'auto requires final binding');
 const binding = { nonce: 'a'.repeat(16), sourceFingerprint: 'b'.repeat(64), expiresAt: new Date(Date.now() + 10000).toISOString(), targets: ['zhihu'] };
 assert.ok(validatePublishMessage({ ...start, mode: 'auto', autoAcknowledged: true, preflightBinding: binding }).ok);

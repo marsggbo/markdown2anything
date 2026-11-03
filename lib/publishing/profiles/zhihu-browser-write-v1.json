@@ -6,8 +6,7 @@
   "draftSupported": true,
   "autoSupported": false,
   "limits": { "timeoutMs": 10000, "acceptedMimes": ["image/jpeg", "image/png", "image/gif", "image/webp"], "maxAssetBytes": 8388608, "maxResponseBytes": 1048576 },
-  "supportedFields": ["title", "body"],
-  "optionMappings": {},
+  "supportedFields": ["title", "body", "topics", "commentPermission", "tableOfContents", "creationDeclaration"],
   "startUrl": "https://zhuanlan.zhihu.com/write",
   "selectors": {
     "title": ["input[placeholder*='标题']", "textarea[placeholder*='标题']"],
