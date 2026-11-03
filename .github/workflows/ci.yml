@@ -33,4 +33,4 @@ jobs:
       - name: 安装 Playwright Chromium
         run: npx playwright-core install chromium --with-deps
       - name: 运行 UI 流程测试
-        run: node test/run.js ui
+        run: xvfb-run -a node test/run.js ui

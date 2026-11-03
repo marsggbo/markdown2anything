@@ -87,18 +87,11 @@ const PLATFORMS = {
     authCookies: ['auth_token'],
     loginUrlPattern: /\/(login|i\/flow\/login)/i,
   },
-  zhihu: {
-    name: '知乎',
-    loginUrl:   'https://www.zhihu.com/signin',
-    publishUrl: 'https://zhuanlan.zhihu.com/write',
-    authCookies: ['z_c0'],
-    loginUrlPattern: /\/signin|\/login/i,
-  },
 };
 
 /** 每个平台一个固定调试端口，resume 时用 connectOverCDP 重连这个还开着的浏览器 */
-const CDP_PORT = { xiaohongshu: 9223, twitter: 9224, zhihu: 9225 };
-function cdpEndpoint() { return `http://127.0.0.1:${CDP_PORT[platform] || 9225}`; }
+const CDP_PORT = { xiaohongshu: 9223, twitter: 9224 };
+function cdpEndpoint() { return `http://127.0.0.1:${CDP_PORT[platform] || 9223}`; }
 
 /**
  * 拿一个浏览器：**优先复用已经开着的那个**（同一个调试端口），没有才新开。
@@ -242,8 +235,6 @@ async function doPublish(jobFile, resume) {
       await publishTwitter(page, def, { tweets: list, link, images, mode, autoNumber, linkPos, oneImagePerTweet });
     } else if (platform === 'xiaohongshu') {
       await publishXiaohongshu(page, def, { title, body, tags, images, mode });
-    } else if (platform === 'zhihu') {
-      await publishZhihu(page, def, { title, html: job.html || '', images, mode });
     }
 
     // 一律不自动关窗。默认 prepare 模式下也【不替用户点发布】——

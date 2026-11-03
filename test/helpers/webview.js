@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 
 const PANEL_PATH = path.join(__dirname, '..', '..', 'webview', 'panel.html');
+const PUBLISH_CONTROLS_PATH = path.join(__dirname, '..', '..', 'webview', 'publish-controls.js');
 
 /**
  * 返回替换好占位符的完整 webview HTML（未注入 vscode stub）。
@@ -20,18 +21,20 @@ function loadPanelHtml(opts = {}) {
     katexDistUri: 'vscode-webview-resource://mock/katex',
     hlStyleUri: 'vscode-webview-resource://mock/hl.css',
     html2canvasUri: 'vscode-webview-resource://mock/h2c.js',
+    publishControlsUri: 'file:///mock/publish-controls.js',
     extVersion: '3.4.7',
     xhsExportMode: 'classic',
     xhsAdaptiveUseTheme: false,
     ...opts,
   };
-  const { nonce, csp, katexDistUri, hlStyleUri, html2canvasUri, extVersion, xhsExportMode, xhsAdaptiveUseTheme } = o;
+  const { nonce, csp, katexDistUri, hlStyleUri, html2canvasUri, publishControlsUri, extVersion, xhsExportMode, xhsAdaptiveUseTheme } = o;
   html = html
     .split('__M2A_NONCE__').join(nonce)
     .split('__M2A_CSP__').join(csp)
     .split('__M2A_KATEX_URI__').join(katexDistUri)
     .split('__M2A_HL_URI__').join(hlStyleUri)
     .split('__M2A_HTML2CANVAS_URI__').join(html2canvasUri)
+    .split('__M2A_PUBLISH_CONTROLS_URI__').join(publishControlsUri)
     .split('__M2A_VERSION__').join(extVersion)
     .split('__M2A_XHS_MODE_CLASSIC__').join(xhsExportMode === 'classic' ? ' selected' : '')
     .split('__M2A_XHS_MODE_ADAPTIVE__').join(xhsExportMode === 'adaptive' ? ' selected' : '')
@@ -41,7 +44,8 @@ function loadPanelHtml(opts = {}) {
     .split('__M2A_XHS_MODE_MIN__').join(xhsExportMode === 'adaptive' ? '20' : '60')
     .split('__M2A_XHS_MODE_MAX__').join(xhsExportMode === 'adaptive' ? '60' : '200')
     .split('__M2A_XHS_MODE_STEP__').join(xhsExportMode === 'adaptive' ? '1' : '5');
-  return html;
+  const controls = fs.readFileSync(PUBLISH_CONTROLS_PATH, 'utf8');
+  return html.replace(`<script nonce="${nonce}" src="${publishControlsUri}"></script>`, `<script nonce="${nonce}">${controls}</script>`);
 }
 
 /** 注入 acquireVsCodeApi stub，返回可直接 setContent 的 HTML */

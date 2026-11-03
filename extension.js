@@ -9,7 +9,9 @@ const crypto = require('crypto');
 
 const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtmlByMode, inlineRemoteImages } = require('./lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('./lib/themes');
-const zhihu = require('./lib/zhihu');
+const { createPublishingRuntime, registerVsCodePublishing } = require('./lib/publishing/host-entry');
+const { SecretStore, validateZhihuCookies } = require('./lib/publishing/secrets');
+const { PUBLISH_COMMANDS } = require('./lib/publishing/messages');
 const llm = require('./lib/llm');
 const social = require('./lib/social');
 const cover = require('./lib/cover');
@@ -39,6 +41,7 @@ const previewPanels = new Map();
 
 /** Map<mdFilePath, NodeJS.Timeout> */
 const debounceTimers = new Map();
+const publishingPanels = new WeakMap();
 
 /** 当前选中的主题 ID（全局，所有预览共享） */
 let currentThemeId = DEFAULT_THEME_ID;
@@ -47,14 +50,13 @@ let currentThemeId = DEFAULT_THEME_ID;
 //  激活 / 停用
 // ─────────────────────────────────────────────
 
-function activate(context) {
+async function activate(context) {
   extContext = context;
   outputChannel = vscode.window.createOutputChannel('Markdown2Anything');
   log('Markdown2Anything 插件已激活');
 
-  // 一次性迁移：3.5.3 之前 cookie 明文存 globalState，升级后改为系统钥匙串（secrets）
-  // 加密存储。启动时把旧值搬进 secrets 并清掉明文，避免用户重新登录。
-  migrateLegacyCookies();
+  await migrateLegacyPublishingSecrets();
+  migrateLegacySocialCookies();
 
   context.subscriptions.push(
     vscode.commands.registerCommand('markdown2anything.preview', handlePreview),
@@ -82,7 +84,7 @@ function activate(context) {
 
 function deactivate() {
   // 收掉常驻的发布 worker（连带关掉它开的浏览器），不留残窗
-  try { killWorker('xiaohongshu'); killWorker('twitter'); killWorker('zhihu'); } catch (_) {}
+  try { killWorker('xiaohongshu'); killWorker('twitter'); } catch (_) {}
   if (outputChannel) outputChannel.dispose();
 }
 
@@ -367,7 +369,68 @@ function installChromium(panel) {
   });
 }
 
+function getPublishingHandler(panel, mdPath) {
+  const existing = publishingPanels.get(panel);
+  if (existing) return existing;
+  const selections = new Map();
+  const secrets = publishingSecrets();
+  const services = {
+    jobRoot: path.join(extContext.globalStorageUri.fsPath, 'publishing', 'jobs'),
+    readDocument: async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (editor && editor.document.uri.fsPath === mdPath && editor.document.isDirty) return { dirty: true };
+      try {
+        return { dirty: false, documentPath: mdPath, displayName: path.basename(mdPath), content: fs.readFileSync(mdPath, 'utf8') };
+      } catch (_) { return { dirty: true }; }
+    },
+    chooseCoverFile: async () => {
+      const result = await vscode.window.showOpenDialog({ canSelectMany: false, canSelectFiles: true, canSelectFolders: false, filters: { Images: ['png', 'jpg', 'jpeg', 'gif', 'webp'] } });
+      if (!result || !result[0]) return null;
+      const selectionId = crypto.randomBytes(18).toString('base64url');
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+      selections.set(selectionId, { path: result[0].fsPath, expiresAt });
+      return { selectionId, label: path.basename(result[0].fsPath), expiresAt };
+    },
+    resolveCoverSelection: selectionId => {
+      const selected = selections.get(selectionId);
+      if (!selected || Date.parse(selected.expiresAt) <= Date.now()) return null;
+      selections.delete(selectionId);
+      return selected.path;
+    },
+    getTargetContext: async target => {
+      const cfg = vscode.workspace.getConfiguration('markdown2anything');
+      const slot = target === 'wechat' ? 'publishing.wechat.appSecret' : target === 'zhihu' ? 'publishing.zhihu.browserCookies' : 'publishing.cnblogs.token';
+      return {
+        account: target === 'wechat' ? { appId: cfg.get('appid', '') } : null,
+        config: { wechat: { appId: cfg.get('appid', '') } },
+        getSecret: value => secrets.get(value),
+        getCredentialRevision: () => secrets.getRevision(slot),
+      };
+    },
+    savePublishConfig: async config => {
+      if (!config || typeof config.appid !== 'string') return;
+      await vscode.workspace.getConfiguration('markdown2anything').update('appid', config.appid, vscode.ConfigurationTarget.Global);
+    },
+    requestCredentialEntry: async slot => {
+      const value = await vscode.window.showInputBox({ prompt: '输入发布凭证', password: true, ignoreFocusOut: true });
+      if (value === undefined) return { available: false };
+      await secrets.set(slot, value);
+      return { available: true };
+    },
+    clearCredential: slot => secrets.delete(slot),
+    openReviewUrl: url => vscode.env.openExternal(vscode.Uri.parse(url)),
+  };
+  const runtime = createPublishingRuntime(services, { browserClientOptions: { execPath: process.execPath, environment: process.env } });
+  const registration = registerVsCodePublishing(runtime, services, event => panel.webview.postMessage(event));
+  publishingPanels.set(panel, registration);
+  return registration;
+}
+
 async function handleWebviewMessage(msg, panel, mdPath) {
+  if (msg && PUBLISH_COMMANDS.includes(msg.type)) {
+    await getPublishingHandler(panel, mdPath).dispatch(msg);
+    return;
+  }
   switch (msg.type) {
     case 'ready': {
       // webview 加载完毕，发送最新内容
@@ -390,14 +453,9 @@ async function handleWebviewMessage(msg, panel, mdPath) {
 
     case 'saveConfig': {
       const cfg = vscode.workspace.getConfiguration('markdown2anything');
-      await cfg.update('appid', msg.appid, vscode.ConfigurationTarget.Global);
-      await cfg.update('appSecret', msg.appSecret, vscode.ConfigurationTarget.Global);
-      if (msg.author !== undefined)
-        await cfg.update('author', msg.author, vscode.ConfigurationTarget.Global);
-      if (msg.digest !== undefined)
-        await cfg.update('digest', msg.digest, vscode.ConfigurationTarget.Global);
+      if (msg.author !== undefined) await cfg.update('author', msg.author, vscode.ConfigurationTarget.Global);
+      if (msg.digest !== undefined) await cfg.update('digest', msg.digest, vscode.ConfigurationTarget.Global);
       panel.webview.postMessage({ type: 'configSaved' });
-      vscode.window.showInformationMessage('配置已保存');
       break;
     }
 
@@ -407,11 +465,6 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       if (msg.key === 'contentWidth' && msg.value !== undefined && msg.value !== null) {
         await cfg.update('preview.contentWidth', Number(msg.value), vscode.ConfigurationTarget.Global);
       }
-      break;
-    }
-
-    case 'upload': {
-      await handleUpload(msg, panel, mdPath);
       break;
     }
 
@@ -609,48 +662,10 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(mdPath));
         const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
         const cfg = vscode.workspace.getConfiguration('markdown2anything');
-        const templateName = cfg.get('template', 'wechat');
-        const templatePath = getTemplatePath(workspacePath, templateName);
+        const templatePath = getTemplatePath(workspacePath, cfg.get('template', 'wechat'));
         const { bodyHtml } = renderMarkdown(mdPath);
-        // 远程图片下载转 base64 内联（保证本地/远程图片统一为 data URI）
-        const inlined = await inlineRemoteImages(bodyHtml);
-        const theme = getTheme(currentThemeId);
-        let html = buildZhihuCopyHtml(inlined, templatePath, theme);
-
-        // 知乎编辑器只认自己图床（zhimg.com）的图片，base64 粘贴会被拒绝。
-        // 若用户已登录知乎，自动上传图片到知乎图床替换为 CDN URL，粘贴即可显示。
-        const imgCount = (html.match(/data:image\//g) || []).length;
-        const cookieStr = await getZhihuCookie();
-        const loggedIn = zhihu.isLoggedIn(cookieStr);
-        let imgUploaded = 0;
-        let imgReused = 0;
-
-        if (imgCount > 0 && loggedIn) {
-          panel.webview.postMessage({ type: 'zhihuHtmlProgress', message: `正在上传 ${imgCount} 张图片到知乎图床...` });
-          try {
-            // 去重缓存：图片内容 md5 → CDN URL，存 globalState 持久化（重启不丢）
-            const cacheKey = 'zhihu.imgCache';
-            const cache = extContext.globalState.get(cacheKey, {});
-            const up = await zhihu.uploadImagesInHtml(html, cookieStr, null, cache);
-            html = up.html;
-            imgUploaded = up.total - up.failed;
-            imgReused = up.reused || 0;
-            // 持久化缓存（限制条数防膨胀）
-            const entries = Object.entries(cache);
-            if (entries.length > 500) {
-              // 保留最近 500 条
-              const trimmed = Object.fromEntries(entries.slice(-500));
-              await extContext.globalState.update(cacheKey, trimmed);
-            } else {
-              await extContext.globalState.update(cacheKey, cache);
-            }
-            log(`知乎复制：图片 ${imgUploaded}/${up.total} 上传成功${imgReused ? `，${imgReused} 张复用缓存` : ''}`);
-            if (up.failed > 0) log(`知乎复制：${up.failed} 张图片上传失败，已保留原图`);
-          } catch (err) {
-            log(`知乎复制：图片上传异常 ${err.message}`);
-          }
-        }
-        panel.webview.postMessage({ type: 'zhihuHtml', html, imgCount, imgUploaded, imgReused, loggedIn });
+        const html = buildZhihuCopyHtml(await inlineRemoteImages(bodyHtml), templatePath, getTheme(currentThemeId));
+        panel.webview.postMessage({ type: 'zhihuHtml', html });
       } catch (err) {
         log(`buildZhihuCopyHtml 失败: ${err.message}`);
         panel.webview.postMessage({ type: 'zhihuHtmlError', message: err.message });
@@ -1485,229 +1500,6 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
-    case 'zhihuCheckLogin': {
-      const cookieStr = await getZhihuCookie();
-      if (zhihu.isLoggedIn(cookieStr)) {
-        const info = await zhihu.verifyLogin(cookieStr);
-        panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: info.valid, name: info.name });
-      } else {
-        panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: false });
-      }
-      break;
-    }
-
-    case 'zhihuStartQr': {
-      // 用 Playwright 打开真实浏览器让用户登录，绕过知乎的反爬限制
-      const { spawn } = require('child_process');
-      const scriptPath = path.join(extContext.extensionUri.fsPath, 'scripts', 'zhihu_login.js');
-      panel.webview.postMessage({ type: 'zhihuQrProgress', message: '正在启动浏览器，请在弹出的窗口中登录...' });
-      log('启动知乎登录浏览器');
-
-      const proc = spawn(process.execPath, [scriptPath], { env: NODE_EXEC_ENV });
-      let stdout = '';
-
-      proc.stdout.on('data', async (d) => {
-        stdout += d.toString();
-        const lines = stdout.split('\n');
-        for (const line of lines) {
-          if (line === 'READY') {
-            panel.webview.postMessage({ type: 'zhihuQrReady' });
-          } else if (line.startsWith('COOKIE:')) {
-            try {
-              const cookies = JSON.parse(line.slice(7));
-              // 把 playwright cookie 数组转为 "name=value; ..." 字符串
-              const cookieStr = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-              const info = await zhihu.verifyLogin(cookieStr);
-              if (info.valid) {
-                await setZhihuCookie(cookieStr);
-                panel.webview.postMessage({ type: 'zhihuPollResult', status: 'confirmed', name: info.name });
-                log(`知乎登录成功: ${info.name}`);
-              } else {
-                panel.webview.postMessage({ type: 'zhihuQrError', message: '登录成功但 Cookie 验证失败，请重试' });
-              }
-            } catch (e) {
-              panel.webview.postMessage({ type: 'zhihuQrError', message: '解析登录结果失败：' + e.message });
-            }
-          } else if (line === 'NEED_INSTALL') {
-            panel.webview.postMessage({ type: 'zhihuQrError', message: '未找到 Chromium，请先使用小红书截图功能触发自动安装' });
-          } else if (line.startsWith('ERROR:')) {
-            panel.webview.postMessage({ type: 'zhihuQrError', message: line.slice(6) });
-          }
-        }
-      });
-
-      proc.on('error', (err) => {
-        panel.webview.postMessage({ type: 'zhihuQrError', message: '启动失败：' + err.message });
-      });
-
-      break;
-    }
-
-    case 'zhihuPollQr':
-      // 已不再使用，Playwright 方案由子进程自行轮询
-      break;
-
-    case 'zhihuLogout': {
-      await setZhihuCookie('');
-      extContext.globalState.update('zhihu._qrToken', undefined);
-      extContext.globalState.update('zhihu._qrCookie', undefined);
-      panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: false });
-      break;
-    }
-
-    case 'zhihuSaveCookie': {
-      try {
-        // 用户粘贴的是 z_c0 的值，包装成完整 cookie 字符串
-        const raw = (msg.z_c0 || '').trim();
-        if (!raw) {
-          panel.webview.postMessage({ type: 'zhihuSaveCookieResult', success: false, error: 'z_c0 值不能为空' });
-          break;
-        }
-        // 支持两种格式：纯值，或已带 "z_c0=..." 前缀
-        const cookieStr = raw.startsWith('z_c0=') ? raw : `z_c0=${raw}`;
-        const info = await zhihu.verifyLogin(cookieStr);
-        if (!info.valid) {
-          panel.webview.postMessage({ type: 'zhihuSaveCookieResult', success: false, error: 'Cookie 无效或已过期，请重新获取' });
-          break;
-        }
-        await setZhihuCookie(cookieStr);
-        panel.webview.postMessage({ type: 'zhihuSaveCookieResult', success: true, name: info.name });
-        panel.webview.postMessage({ type: 'zhihuLoginStatus', loggedIn: true, name: info.name });
-      } catch (err) {
-        log(`知乎 Cookie 验证失败: ${err.message}`);
-        panel.webview.postMessage({ type: 'zhihuSaveCookieResult', success: false, error: err.message });
-      }
-      break;
-    }
-
-    case 'zhihuGetArticleId': {
-      const mapKey = 'zhihu.articleIdMap';
-      const map = extContext.globalState.get(mapKey, {});
-      const savedId = map[mdPath] || null;
-      panel.webview.postMessage({ type: 'zhihuArticleId', articleId: savedId });
-      break;
-    }
-
-    case 'zhihuPublish': {
-      try {
-        const cookieStr = await getZhihuCookie();
-        if (!zhihu.isLoggedIn(cookieStr)) {
-          panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: '未登录，请先扫码登录' });
-          break;
-        }
-        const { title, articleId: existingId } = msg;
-        if (!title || !title.trim()) {
-          panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: '文章标题不能为空' });
-          break;
-        }
-
-        panel.webview.postMessage({ type: 'zhihuPublishStart' });
-        log(`开始发布到知乎: ${title}${existingId ? ` (更新 ${existingId})` : ''}`);
-
-        const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(mdPath));
-        const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
-        const cfg = vscode.workspace.getConfiguration('markdown2anything');
-        const templateName = cfg.get('template', 'wechat');
-        const templatePath = getTemplatePath(workspacePath, templateName);
-        // 走【真实浏览器】发布：知乎没有公开 API 且会主动改内部接口搞挂第三方工具，
-        // 之前直接调 api.zhihu.com 传图已经失效；而且当时把「剪贴板版」的带样式 HTML
-        // （258KB，每个标签都挂 inline style）直接丢给接口，被知乎的过滤器洗坏 —— 表现就是
-        // 代码折叠成一行、公式丢失、图片没传上去。
-        //
-        // 现在改成：干净的语义化 HTML + 用知乎编辑器自己的通道传图。
-        const { bodyHtml } = renderMarkdown(mdPath);
-        const cleanHtml = zhihu.buildPublishHtml(bodyHtml);       // <pre lang="python"> + eeimg 公式 + 无 style
-        const localImages = listMarkdownLocalImages(mdPath);      // 按出现顺序的本地图
-        const cookies = await zhihuBrowserCookies();
-
-        if (!cookies.length) {
-          panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: '未登录，请先扫码登录' });
-          break;
-        }
-
-        log(`知乎发布：正文 ${cleanHtml.length} 字节，本地图 ${localImages.length} 张`);
-        killWorker('zhihu');
-        const pcfg2 = vscode.workspace.getConfiguration('markdown2anything');
-        const result = await social.publish('zhihu', {
-          extensionPath: extContext.extensionUri.fsPath,
-          cookies,
-          content: { title: title.trim(), html: cleanHtml },
-          images: localImages,
-          mode: pcfg2.get('publish.mode', 'prepare'),
-          headless: false,
-          onChild: (c) => { lastChild.zhihu = c; },
-          onProgress: (m) => panel.webview.postMessage({ type: 'zhihuPublishProgress', message: m }),
-          onStep: (s) => panel.webview.postMessage({ type: 'zhihuPublishProgress', message: `[${s.done}/${s.total}] ${s.label}` }),
-        });
-
-        panel.webview.postMessage({
-          type: 'zhihuPublishResult', success: true, browser: true,
-          message: result.status === 'ready'
-            ? '✅ 标题、正文、图片都已填好，请在浏览器里核对后自己点「发布」'
-            : '✅ 已提交发布，请在浏览器确认',
-        });
-        break;
-      } catch (err) {
-        log(`知乎发布失败: ${err.message}`);
-        panel.webview.postMessage({ type: 'zhihuPublishResult', success: false, error: err.message });
-      }
-      break;
-    }
-
-    case 'zhihuSaveDraft': {
-      try {
-        const cookieStr = await getZhihuCookie();
-        if (!zhihu.isLoggedIn(cookieStr)) {
-          panel.webview.postMessage({ type: 'zhihuDraftResult', success: false, error: '未登录，请先扫码登录' });
-          break;
-        }
-        const { title, articleId: existingId } = msg;
-        if (!title || !title.trim()) {
-          panel.webview.postMessage({ type: 'zhihuDraftResult', success: false, error: '文章标题不能为空' });
-          break;
-        }
-
-        panel.webview.postMessage({ type: 'zhihuPublishStart' });
-        log(`保存知乎草稿: ${title}${existingId ? ` (articleId=${existingId})` : ''}`);
-
-        const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(mdPath));
-        const workspacePath = workspaceFolder ? workspaceFolder.uri.fsPath : path.dirname(mdPath);
-        const cfg = vscode.workspace.getConfiguration('markdown2anything');
-        const templateName = cfg.get('template', 'wechat');
-        const templatePath = getTemplatePath(workspacePath, templateName);
-        const { bodyHtml } = renderMarkdown(mdPath);
-        const theme = getTheme(currentThemeId);
-        let htmlContent = buildZhihuCopyHtml(bodyHtml, templatePath, theme);
-
-        htmlContent = zhihu.normalizeCodeBlocks(htmlContent);
-        htmlContent = zhihu.normalizeImagesForZhihu(htmlContent);
-
-        panel.webview.postMessage({ type: 'zhihuPublishProgress', message: '正在上传图片...' });
-        const uploadResult = await zhihu.uploadImagesInHtml(htmlContent, cookieStr, (done, total) => {
-          panel.webview.postMessage({ type: 'zhihuPublishProgress', message: `正在上传图片 ${done}/${total}...` });
-        });
-        htmlContent = uploadResult.html;
-
-        panel.webview.postMessage({ type: 'zhihuPublishProgress', message: '正在保存草稿...' });
-        const result = await zhihu.saveAsDraft({ articleId: existingId || null, title: title.trim(), htmlContent, cookieStr });
-
-        const mapKey = 'zhihu.articleIdMap';
-        const map = extContext.globalState.get(mapKey, {});
-        map[mdPath] = result.articleId;
-        await extContext.globalState.update(mapKey, map);
-
-        log(`知乎草稿保存成功: ${result.editUrl}`);
-        panel.webview.postMessage({ type: 'zhihuDraftResult', success: true, articleId: result.articleId, editUrl: result.editUrl });
-        vscode.window.showInformationMessage('✅ 草稿已保存！可在知乎编辑器预览效果。', '打开编辑器').then(a => {
-          if (a === '打开编辑器') vscode.env.openExternal(vscode.Uri.parse(result.editUrl));
-        });
-      } catch (err) {
-        log(`知乎草稿保存失败: ${err.message}`);
-        panel.webview.postMessage({ type: 'zhihuDraftResult', success: false, error: err.message });
-      }
-      break;
-    }
-
     case 'exportPpt': {
       await handleExportPpt(msg, panel, mdPath);
       break;
@@ -2297,37 +2089,64 @@ function socialStorage() {
   };
 }
 
-/**
- * 一次性迁移：3.5.3 之前 cookie 明文存 globalState（VS Code state.vscdb），
- * 本版本起改存 secrets（系统钥匙串）。把旧明文搬到 secrets 后清掉。
- * 知乎两个 key 都迁：zhihu.cookieString（字符串）+ zhihu.browserCookies（数组）
- * 小红书/推特是 xiaohongshu.cookies / twitter.cookies。
- */
-function migrateLegacyCookies() {
-  const legacyKeys = [
-    'zhihu.cookieString',
-    'zhihu.browserCookies',
-    'xiaohongshu.cookies',
-    'twitter.cookies',
-  ];
+let publishingSecretStore;
+
+function publishingSecrets() {
+  if (!publishingSecretStore) {
+    publishingSecretStore = new SecretStore({
+      availability: async () => ({ available: true }),
+      get: slot => extContext.secrets.get(slot),
+      set: (slot, value) => extContext.secrets.store(slot, value),
+      delete: slot => extContext.secrets.delete(slot),
+    });
+  }
+  return publishingSecretStore;
+}
+
+function legacyZhihuCookies(value) {
+  if (!value) return null;
+  const source = typeof value === 'string' ? value : JSON.stringify(value);
+  try { return validateZhihuCookies(source); } catch (_) {}
+  const match = /(?:^|;\s*)z_c0=([^;\s]+)/.exec(source);
+  if (!match) return null;
+  try {
+    return validateZhihuCookies(JSON.stringify([{
+      name: 'z_c0', value: match[1], domain: '.zhihu.com', path: '/', expires: -1,
+      httpOnly: false, secure: true, sameSite: 'Lax',
+    }]));
+  } catch (_) { return null; }
+}
+
+async function migrateLegacyPublishingSecrets() {
+  const secrets = publishingSecrets();
+  const cfg = vscode.workspace.getConfiguration('markdown2anything');
+  const appSecret = cfg.get('appSecret', '');
+  if (typeof appSecret === 'string' && appSecret) {
+    await secrets.set('publishing.wechat.appSecret', appSecret);
+    if (await secrets.get('publishing.wechat.appSecret') !== appSecret) throw new Error('SECURE_STORAGE_UNAVAILABLE');
+    await cfg.update('appSecret', undefined, vscode.ConfigurationTarget.Global);
+  }
+  for (const key of ['zhihu.browserCookies', 'zhihu.cookieString']) {
+    const legacy = extContext.globalState.get(key, undefined);
+    const cookies = legacyZhihuCookies(legacy);
+    if (!cookies) continue;
+    await secrets.set('publishing.zhihu.browserCookies', cookies);
+    if (await secrets.get('publishing.zhihu.browserCookies') !== cookies) throw new Error('SECURE_STORAGE_UNAVAILABLE');
+    await extContext.globalState.update(key, undefined);
+  }
+}
+
+/** 将仍受支持的小红书和 Twitter Cookie 迁入 SecretStorage。 */
+function migrateLegacySocialCookies() {
+  const legacyKeys = ['xiaohongshu.cookies', 'twitter.cookies'];
   legacyKeys.forEach((key) => {
     const old = extContext.globalState.get(key, undefined);
-    if (old == null || old === '') return;   // 没有旧值，跳过
+    if (old == null || old === '') return;
     extContext.secrets.store(key, String(old)).then(() => {
       extContext.globalState.update(key, undefined);
       log(`已将 cookie ${key} 迁移到系统钥匙串（加密存储）`);
-    }).catch((e) => log(`cookie ${key} 迁移失败: ${e.message}`));
+    }).catch((error) => log(`cookie ${key} 迁移失败: ${error.message}`));
   });
-}
-
-/** 读知乎 cookie（系统钥匙串加密存储） */
-async function getZhihuCookie() {
-  return (await extContext.secrets.get(zhihu.STORAGE_KEY)) || '';
-}
-/** 写知乎 cookie（系统钥匙串加密存储）；传空/undefined 表示清除 */
-async function setZhihuCookie(str) {
-  if (!str) await extContext.secrets.delete(zhihu.STORAGE_KEY);
-  else await extContext.secrets.store(zhihu.STORAGE_KEY, str);
 }
 
 /** 读文章元信息：标题 + 全文链接（从 front matter permalink/url/link） */
@@ -2413,38 +2232,6 @@ function exportXhsImages(mdPath, panel, platform, retried = false, exportMode) {
   });
 }
 
-/** 把已有的知乎 cookie 字符串转成 Playwright cookie 数组（复用现有扫码登录，不用重登） */
-async function zhihuBrowserCookies() {
-  const str = (await getZhihuCookie()) || '';
-  return str.split(/;\s*/).map(p => {
-    const i = p.indexOf('=');
-    if (i <= 0) return null;
-    return {
-      name: p.slice(0, i).trim(), value: p.slice(i + 1).trim(),
-      domain: '.zhihu.com', path: '/', expires: -1,
-      httpOnly: false, secure: true, sameSite: 'Lax',
-    };
-  }).filter(c => c && c.name && c.value);
-}
-
-/** 按 markdown 里出现的顺序列出所有【本地】图片的绝对路径（知乎发布要拿文件去喂上传控件） */
-function listMarkdownLocalImages(mdPath) {
-  try {
-    const raw = fs.readFileSync(mdPath, 'utf8');
-    const dir = path.dirname(mdPath);
-    const out = [];
-    const re = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
-    let m;
-    while ((m = re.exec(raw)) !== null) {
-      const src = m[1];
-      if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) continue;  // 远程图跳过
-      const abs = path.isAbsolute(src) ? src : path.resolve(dir, src);
-      if (fs.existsSync(abs)) out.push(abs);
-    }
-    return out;
-  } catch (_) { return []; }
-}
-
 /**
  * 列出已导出的长图（<base>_xhs/ 下的 png/jpg），发布时作为配图。
  *
@@ -2492,60 +2279,10 @@ function sendConfig(panel) {
   const cfg = vscode.workspace.getConfiguration('markdown2anything');
   panel.webview.postMessage({
     type: 'config',
-    appid: cfg.get('appid', ''),
-    appSecret: cfg.get('appSecret', ''),
     author: cfg.get('author', ''),
     digest: cfg.get('digest', ''),
     previewContentWidth: cfg.get('preview.contentWidth', 70),
   });
-}
-
-// ─────────────────────────────────────────────
-//  上传到微信草稿箱（通过 FastPen API）
-// ─────────────────────────────────────────────
-
-async function handleUpload(msg, panel, mdPath) {
-  const { rawMarkdown } = renderMarkdown(mdPath);
-
-  const { appid, appSecret, title, author, digest } = msg;
-
-  if (!appid || !appSecret) {
-    panel.webview.postMessage({
-      type: 'uploadResult',
-      success: false,
-      error: '请先配置 AppID 和 AppSecret',
-    });
-    return;
-  }
-
-  panel.webview.postMessage({ type: 'uploadStart' });
-  log(`开始上传: ${title}`);
-
-  try {
-    const result = await postToFastPen({ markdown: rawMarkdown, title, appid, appSecret, author, digest });
-    log(`上传结果: ${JSON.stringify(result)}`);
-    if (result.success) {
-      panel.webview.postMessage({
-        type: 'uploadResult',
-        success: true,
-        mediaId: result.data && result.data.media_id,
-      });
-      vscode.window.showInformationMessage(`✅ 上传成功！media_id: ${result.data && result.data.media_id}`);
-    } else {
-      panel.webview.postMessage({
-        type: 'uploadResult',
-        success: false,
-        error: result.message || '上传失败，请检查配置',
-      });
-    }
-  } catch (err) {
-    log(`上传异常: ${err.message}`);
-    panel.webview.postMessage({
-      type: 'uploadResult',
-      success: false,
-      error: err.message,
-    });
-  }
 }
 
 // ─────────────────────────────────────────────
@@ -2787,54 +2524,6 @@ async function handleExportWord(msg, panel, mdPath) {
   }
 }
 
-/**
- * POST to FastPen API to upload article to WeChat draft box.
- * @param {{ markdown, title, appid, appSecret, author, digest }} params
- */
-function postToFastPen({ markdown, title, appid, appSecret, author, digest }) {
-  return new Promise((resolve, reject) => {
-    const bodyData = JSON.stringify({
-      markdown,
-      title,
-      appid,
-      app_secret: appSecret,
-      author: author || '',
-      digest: digest || '',
-    });
-
-    const options = {
-      hostname: 'www.fastpen.online',
-      path: '/api/draft/multi/import-markdown',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(bodyData, 'utf8'),
-        'User-Agent': 'markdown2anything-vscode/1.0',
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => (data += chunk));
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (_) {
-          reject(new Error(`服务器响应解析失败: ${data.slice(0, 200)}`));
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.setTimeout(30000, () => {
-      req.destroy();
-      reject(new Error('请求超时（30s），请检查网络'));
-    });
-    req.write(bodyData, 'utf8');
-    req.end();
-  });
-}
-
 // ─────────────────────────────────────────────
 //  生成 Webview HTML
 // ─────────────────────────────────────────────
@@ -3020,6 +2709,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     'html2canvas.min.js',
   );
   const html2canvasUri = webview.asWebviewUri(vscode.Uri.file(html2canvasPath));
+  const publishControlsUri = webview.asWebviewUri(vscode.Uri.file(path.join(extContext.extensionUri.fsPath, 'webview', 'publish-controls.js')));
 
     // 读取静态面板模板（webview/panel.html），替换运行时占位符
   // 模板由 scripts/gen-panel.js 生成，与旧内联模板逐字节等价（见 test/compare_html.test.js）
@@ -3030,6 +2720,7 @@ function getWebviewHtml(webview, _bodyHtml, mdPath) {
     .split('__M2A_KATEX_URI__').join(katexDistUri)
     .split('__M2A_HL_URI__').join(hlStyleUri)
     .split('__M2A_HTML2CANVAS_URI__').join(html2canvasUri)
+    .split('__M2A_PUBLISH_CONTROLS_URI__').join(publishControlsUri)
     .split('__M2A_VERSION__').join(extVersion)
     .split('__M2A_XHS_MODE_CLASSIC__').join(xhsExportMode === 'classic' ? ' selected' : '')
     .split('__M2A_XHS_MODE_ADAPTIVE__').join(xhsExportMode === 'adaptive' ? ' selected' : '')

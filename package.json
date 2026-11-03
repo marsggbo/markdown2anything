@@ -109,12 +109,7 @@
         "markdown2anything.appid": {
           "type": "string",
           "default": "",
-          "description": "微信公众号 AppID（用于上传草稿箱，通过 FastPen 服务）"
-        },
-        "markdown2anything.appSecret": {
-          "type": "string",
-          "default": "",
-          "description": "微信公众号 AppSecret（用于上传草稿箱，通过 FastPen 服务）"
+          "description": "微信公众号 AppID（用于官方草稿箱发布）"
         },
         "markdown2anything.author": {
           "type": "string",

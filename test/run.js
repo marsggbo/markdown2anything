@@ -37,6 +37,7 @@ const mode = process.argv[2] || 'all';
 if (mode === 'all' || mode === 'syntax') {
   console.log('── 源码语法检查 ──');
   run('extension.js', () => sh('node --check extension.js'));
+  run('webview/publish-controls.js', () => sh('node --check webview/publish-controls.js'));
   for (const dir of ['lib', 'scripts', 'cli', 'skills']) {
     const files = [];
     (function walk(d) {
@@ -58,6 +59,8 @@ if (mode === 'all' || mode === 'syntax') {
     if (!/^(host_|render_chain)\.js$/.test(f) && !f.startsWith('host_')) continue;    run(f, () => sh(`node "${path.join(logicDir, f)}"`));
   }
   run('publishing/run.js', () => sh('node test/publishing/run.js'));
+  run('electron/app-bootstrap.js', () => sh('node --check electron/app-bootstrap.js'));
+  run('electron/publish-main-fixture.js', () => sh('node test/electron/publish-main-fixture.js'));
 
   console.log('── webview/panel.html 检查 ──');
   run('内联脚本语法 (3 块)', () => {
