@@ -41,5 +41,5 @@ const cliSrc = fs.readFileSync(path.join(root, 'cli', 'lib', 'actions.js'), 'utf
 const cliHits = (cliSrc.match(/spawn\(\s*process\.execPath/g) || []).length;
 console.log(`ℹ️ cli/lib/actions.js: ${cliHits} 处（CLI 场景 process.execPath 即 node，无需 env）`);
 
-assert.ok(total >= 5, '至少应扫描到 5 处 spawn（已移除旧知乎 worker）');
+assert.ok(total >= 6, '至少应扫描到 6 处 spawn（extension.js 6 + social.js 2）');
 console.log(`\n✅ spawn 环境变量回归检查通过（共 ${total} 处）`);

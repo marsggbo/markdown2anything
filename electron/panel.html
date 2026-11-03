@@ -1066,11 +1066,11 @@
             <span class="item-desc">带样式 HTML，直接粘贴到公众号编辑器</span>
           </span>
         </button>
-        <button class="dropdown-item" id="btn-publish" data-publish-launcher>
-          <span class="item-icon">🚀</span>
+        <button class="dropdown-item" id="btn-upload">
+          <span class="item-icon">☁️</span>
           <span class="dropdown-item-content">
-            <span class="item-label">统一发布</span>
-            <span class="item-desc">选择微信公众号、知乎和博客园，默认准备草稿</span>
+            <span class="item-label">上传到草稿箱</span>
+            <span class="item-desc">通过 API 直接推送到公众号草稿（需配置 AppID）</span>
           </span>
         </button>
       </div>
@@ -1088,11 +1088,11 @@
             <span class="item-desc">带样式 HTML，手动粘贴到知乎编辑器</span>
           </span>
         </button>
-        <button class="dropdown-item" id="btn-publish-zhihu" data-publish-launcher>
+        <button class="dropdown-item" id="btn-zhihu-publish">
           <span class="item-icon">🚀</span>
           <span class="dropdown-item-content">
-            <span class="item-label">统一发布</span>
-            <span class="item-desc">按图片顺序准备知乎审核状态</span>
+            <span class="item-label">自动发布</span>
+            <span class="item-desc">打开浏览器，自动填充标题和正文（需登录）</span>
           </span>
         </button>
       </div>
@@ -1359,10 +1359,111 @@
       </div>
     </div>
 
-    <!-- 统一发布面板（控制器由 publish-controls.js 注入） -->
-    <div class="side-panel" id="publish-panel">
-      <div class="side-panel-header">🚀 发布到多个平台<button class="panel-close-btn" id="publish-panel-close">×</button></div>
-      <div class="side-panel-body" id="publish-controls-root"></div>
+    <!-- 上传面板 -->
+    <div class="side-panel" id="upload-panel">
+      <div class="side-panel-header">☁️ 上传到微信公众号<button class="panel-close-btn" data-close-panel="upload-panel" data-close-state="uploadPanelOpen">×</button></div>
+      <div class="side-panel-body">
+        <!-- 配置区 -->
+        <div id="config-section">
+          <p class="hint">
+            需要配置微信公众号开发者信息。<br>
+            前往
+            <a href="https://mp.weixin.qq.com/" title="微信公众平台">微信公众平台</a>
+            → 设置与开发 → 基本配置 中获取。
+          </p>
+          <label>AppID <span style="color:#f06529">*</span></label>
+          <input type="text" id="input-appid" placeholder="wx开头的AppID">
+          <label>AppSecret <span style="color:#f06529">*</span></label>
+          <input type="password" id="input-appsecret" placeholder="AppSecret">
+          <div class="panel-actions">
+            <button class="btn btn-primary" id="btn-save-config">保存配置</button>
+          </div>
+          <div class="divider"></div>
+        </div>
+
+        <!-- 文章信息 -->
+        <label>文章标题 <span style="color:#f06529">*</span></label>
+        <input type="text" id="input-title" placeholder="文章标题">
+        <label>作者（可选）</label>
+        <input type="text" id="input-author" placeholder="作者名称">
+        <label>文章摘要（可选）</label>
+        <textarea id="input-digest" placeholder="文章摘要，留空则自动截取" style="min-height:60px;"></textarea>
+
+        <div class="hint" style="margin-top:12px;color:#e6a817;border:1px solid #555;padding:8px;border-radius:4px;">
+          ⚠️ 上传功能通过 <a href="https://www.fastpen.online" title="FastPen">FastPen</a> 第三方服务实现，您的 AppSecret 将被发送至该服务。请确认您信任该服务后再使用。
+        </div>
+
+        <div class="panel-actions" style="margin-top:14px;">
+          <button class="btn btn-upload" id="btn-do-upload">上传草稿箱</button>
+        </div>
+
+        <!-- 上传结果 -->
+        <div class="upload-result" id="upload-result"></div>
+      </div>
+    </div>
+
+    <!-- 知乎发布面板 -->
+    <div class="side-panel" id="zhihu-publish-panel">
+      <div class="side-panel-header">🚀 发布到知乎<button class="panel-close-btn" data-close-panel="zhihu-publish-panel" data-close-state="zhihuPublishPanelOpen">×</button></div>
+      <div class="side-panel-body">
+
+        <!-- 已登录视图 -->
+        <div id="zhihu-logged-in" style="display:none;">
+          <p class="hint" style="color:#4caf50;">✅ 已登录：<strong id="zhihu-user-name"></strong></p>
+          <div class="panel-actions">
+            <button class="btn btn-secondary" id="btn-zhihu-logout">退出登录</button>
+          </div>
+          <div class="divider"></div>
+          <label>文章标题 <span style="color:#f06529">*</span></label>
+          <input type="text" id="zhihu-input-title" placeholder="文章标题">
+          <label>已有文章 ID（留空 = 新建，填写 = 更新）</label>
+          <input type="text" id="zhihu-input-article-id" placeholder="留空新建，填写则更新已有文章">
+          <p class="hint" style="margin-top:4px;">文章 ID 是知乎链接 <code style="color:#4fc3f7;">/p/</code> 后的数字，发布成功后自动填入。</p>
+          <div class="hint" style="margin-top:10px;color:#e6a817;border:1px solid #555;padding:8px;border-radius:4px;">
+            ⚠️ 发布后文章将直接公开到你的知乎专栏，请确认内容无误后再发布。
+          </div>
+          <div class="panel-actions" style="margin-top:14px;">
+            <button class="btn btn-zhihu-publish" id="btn-zhihu-do-publish">发布文章</button>
+            <button class="btn btn-secondary" id="btn-zhihu-save-draft" title="保存为草稿，可在知乎官网预览效果后再发布">保存草稿</button>
+          </div>
+          <p class="hint" id="zhihu-publish-progress" style="margin-top:8px;display:none;"></p>
+          <div class="upload-result" id="zhihu-publish-result"></div>
+        </div>
+
+        <!-- 未登录视图：标签页切换 -->
+        <div id="zhihu-logged-out">
+          <!-- 标签页 -->
+          <div style="display:flex;gap:0;margin-bottom:14px;border-bottom:1px solid #444;">
+            <button id="zhihu-tab-qr"     class="zhihu-tab zhihu-tab-active">📱 扫码登录</button>
+            <button id="zhihu-tab-cookie" class="zhihu-tab">🍪 手动 Cookie</button>
+          </div>
+
+          <!-- 浏览器登录 -->
+          <div id="zhihu-pane-qr">
+            <p class="hint">点击下方按钮，将弹出真实浏览器窗口。<br>在浏览器中用手机扫码（或账号密码）登录知乎，登录后插件将自动获取凭证。<br><br>登录凭证仅保存在本地 VS Code 存储中，不写入文件，不会被 git 追踪。</p>
+            <div class="panel-actions">
+              <button class="btn btn-zhihu-publish" id="btn-zhihu-qr">打开浏览器登录</button>
+            </div>
+            <p class="hint" id="zhihu-qr-hint" style="margin-top:10px;display:none;"></p>
+          </div>
+
+          <!-- 手动 Cookie -->
+          <div id="zhihu-pane-cookie" style="display:none;">
+            <p class="hint">
+              在浏览器打开 <strong style="color:#ccc;">zhihu.com</strong>，登录后按 F12 → Application → Cookies，
+              复制 <code style="color:#4fc3f7;">z_c0</code> 的值粘贴到下方。<br>
+              Cookie 仅保存在本地 VS Code 存储中，不写入文件，不会被 git 追踪。
+            </p>
+            <label>z_c0 Cookie 值 <span style="color:#f06529">*</span></label>
+            <textarea id="zhihu-input-cookie" placeholder="粘贴 z_c0 的值..." style="min-height:80px;font-size:11px;word-break:break-all;"></textarea>
+            <div class="panel-actions" style="margin-top:10px;">
+              <button class="btn btn-zhihu-publish" id="btn-zhihu-save-cookie">验证并保存</button>
+            </div>
+            <div class="upload-result" id="zhihu-cookie-result"></div>
+          </div>
+        </div>
+
+      </div>
     </div>
 
     <!-- 小红书面板 -->
@@ -2032,7 +2133,7 @@
     let currentBodyHtml = '';
     let currentThemeBg = '#ffffff';
     // 用对象统一管理面板开关状态，避免 let 变量与 window 属性不同步的 bug
-    const panelState = { stylePanelOpen: false, settingsPanelOpen: false, publishPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, twitterPanelOpen: false, pptPanelOpen: false, wordPanelOpen: false, llmConfigPanelOpen: false, coverPanelOpen: false };
+    const panelState = { stylePanelOpen: false, settingsPanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false, twitterPanelOpen: false, pptPanelOpen: false, wordPanelOpen: false, llmConfigPanelOpen: false, coverPanelOpen: false };
 
     // 系统出厂默认值（恢复出厂用）
     const XHS_DEFAULTS          = { width: 1080, height: 1440, padding: 40, tolerance: 15, density: 100 };
@@ -2472,8 +2573,8 @@
       const map = [
         ['btn-toc',        'btn-toc',       panelState.tocPanelOpen],
         ['btn-twitter',    'btn-twitter',   panelState.twitterPanelOpen],
-        ['btn-dd-wechat',  'btn-primary',   panelState.publishPanelOpen],
-        ['btn-dd-zhihu',   'btn-zhihu',     panelState.publishPanelOpen],
+        ['btn-dd-wechat',  'btn-primary',   panelState.uploadPanelOpen],
+        ['btn-dd-zhihu',   'btn-zhihu',     panelState.zhihuPublishPanelOpen],
         ['btn-dd-xhs',     'btn-xhs',       panelState.xhsPanelOpen],
         ['btn-dd-export',  'btn-secondary', panelState.pptPanelOpen || panelState.wordPanelOpen],
       ];
@@ -2645,6 +2746,18 @@
       vscode.postMessage({ type: 'getWechatHtml' });
     });
 
+    // 上传公众号草稿箱
+    document.getElementById('btn-upload').addEventListener('click', () => {
+      closeAllDropdowns();
+      togglePanel('upload-panel', 'uploadPanelOpen',
+        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'}]);
+      if (panelState.uploadPanelOpen) {
+        const titleInput = document.getElementById('input-title');
+        if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
+        vscode.postMessage({ type: 'getConfig' });
+      }
+    });
+
     // ─── 知乎 ───
     // 知乎复制
     document.getElementById('btn-zhihu').addEventListener('click', () => {
@@ -2656,9 +2769,79 @@
       vscode.postMessage({ type: 'getZhihuHtml' });
     });
 
+    // 知乎自动发布（打开侧面板）
+    document.getElementById('btn-zhihu-publish').addEventListener('click', () => {
+      closeAllDropdowns();
+      togglePanel('zhihu-publish-panel', 'zhihuPublishPanelOpen',
+        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'}]);
+      if (panelState.zhihuPublishPanelOpen) {
+        const titleInput = document.getElementById('zhihu-input-title');
+        if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
+        vscode.postMessage({ type: 'zhihuCheckLogin' });
+        vscode.postMessage({ type: 'zhihuGetArticleId' });
+      }
+    });
+
+    // 知乎面板内部事件
+
+    // 标签页切换
+    function switchZhihuTab(tab) {
+      const isQr = tab === 'qr';
+      document.getElementById('zhihu-pane-qr').style.display     = isQr ? '' : 'none';
+      document.getElementById('zhihu-pane-cookie').style.display  = isQr ? 'none' : '';
+      document.getElementById('zhihu-tab-qr').className     = 'zhihu-tab' + (isQr ? ' zhihu-tab-active' : '');
+      document.getElementById('zhihu-tab-cookie').className  = 'zhihu-tab' + (!isQr ? ' zhihu-tab-active' : '');
+      if (!isQr) stopZhihuQrPoll();
+    }
+    document.getElementById('zhihu-tab-qr').addEventListener('click',     () => switchZhihuTab('qr'));
+    document.getElementById('zhihu-tab-cookie').addEventListener('click',  () => switchZhihuTab('cookie'));
+
+    document.getElementById('btn-zhihu-qr').addEventListener('click', () => {
+      vscode.postMessage({ type: 'zhihuStartQr' });
+    });
+
+    document.getElementById('btn-zhihu-save-cookie').addEventListener('click', () => {
+      const raw = document.getElementById('zhihu-input-cookie').value.trim();
+      if (!raw) { showToast('请输入 z_c0 值', 'error'); return; }
+      const btn = document.getElementById('btn-zhihu-save-cookie');
+      btn.disabled = true; btn.textContent = '⏳ 验证中...';
+      vscode.postMessage({ type: 'zhihuSaveCookie', z_c0: raw });
+    });
+
+    document.getElementById('btn-zhihu-logout').addEventListener('click', () => {
+      if (!confirm('确认退出知乎登录？')) return;
+      vscode.postMessage({ type: 'zhihuLogout' });
+    });
+
+    document.getElementById('btn-zhihu-do-publish').addEventListener('click', () => {
+      const title     = document.getElementById('zhihu-input-title').value.trim();
+      const articleId = document.getElementById('zhihu-input-article-id').value.trim();
+      if (!title) { showToast('请填写文章标题', 'error'); return; }
+      vscode.postMessage({ type: 'zhihuPublish', title, articleId: articleId || null });
+    });
+
+    document.getElementById('btn-zhihu-save-draft').addEventListener('click', () => {
+      const title     = document.getElementById('zhihu-input-title').value.trim();
+      const articleId = document.getElementById('zhihu-input-article-id').value.trim();
+      if (!title) { showToast('请填写文章标题', 'error'); return; }
+      vscode.postMessage({ type: 'zhihuSaveDraft', title, articleId: articleId || null });
+    });
+
+    // 扫码轮询定时器
+    let _zhihuQrTimer = null;
+    function startZhihuQrPoll() {
+      stopZhihuQrPoll();
+      _zhihuQrTimer = setInterval(() => {
+        vscode.postMessage({ type: 'zhihuPollQr' });
+      }, 2000);
+    }
+    function stopZhihuQrPoll() {
+      if (_zhihuQrTimer) { clearInterval(_zhihuQrTimer); _zhihuQrTimer = null; }
+    }
+
     const _allPanels = [
-      {panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'settings-panel',stateKey:'settingsPanelOpen'},
-      {panelId:'publish-panel',stateKey:'publishPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},
+      {panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'settings-panel',stateKey:'settingsPanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},
+      {panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},
       {panelId:'twitter-panel',stateKey:'twitterPanelOpen'},{panelId:'ppt-panel',stateKey:'pptPanelOpen'},
       {panelId:'word-panel',stateKey:'wordPanelOpen'},{panelId:'llm-config-panel',stateKey:'llmConfigPanelOpen'},
       {panelId:'cover-panel',stateKey:'coverPanelOpen'}
@@ -3375,13 +3558,13 @@
 
     document.getElementById('btn-style').addEventListener('click', () => {
       togglePanel('style-panel', 'stylePanelOpen',
-        [{panelId:'publish-panel',stateKey:'publishPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'settings-panel',stateKey:'settingsPanelOpen'}]);
+        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'settings-panel',stateKey:'settingsPanelOpen'}]);
     });
 
     // ─── 设置面板 ───
     document.getElementById('btn-settings').addEventListener('click', () => {
       togglePanel('settings-panel', 'settingsPanelOpen',
-        [{panelId:'publish-panel',stateKey:'publishPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'style-panel',stateKey:'stylePanelOpen'}]);
+        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'style-panel',stateKey:'stylePanelOpen'}]);
     });
 
     // 打开自定义样式面板（从设置面板跳转）
@@ -3456,6 +3639,39 @@
       showToast('样式已重置');
     });
 
+    // 保存配置
+    document.getElementById('btn-save-config').addEventListener('click', () => {
+      const appid     = document.getElementById('input-appid').value.trim();
+      const appSecret = document.getElementById('input-appsecret').value.trim();
+      const author    = document.getElementById('input-author').value.trim();
+      const digest    = document.getElementById('input-digest').value.trim();
+      if (!appid || !appSecret) {
+        showToast('AppID 和 AppSecret 不能为空', 'error');
+        return;
+      }
+      vscode.postMessage({ type: 'saveConfig', appid, appSecret, author, digest });
+    });
+
+    // 上传
+    document.getElementById('btn-do-upload').addEventListener('click', () => {
+      const appid     = document.getElementById('input-appid').value.trim();
+      const appSecret = document.getElementById('input-appsecret').value.trim();
+      const title     = document.getElementById('input-title').value.trim();
+      const author    = document.getElementById('input-author').value.trim();
+      const digest    = document.getElementById('input-digest').value.trim();
+
+      if (!appid || !appSecret) {
+        showToast('请先填写并保存 AppID / AppSecret', 'error');
+        return;
+      }
+      if (!title) {
+        showToast('请填写文章标题', 'error');
+        return;
+      }
+
+      vscode.postMessage({ type: 'upload', appid, appSecret, title, author, digest });
+    });
+
     // ─── 接收 extension 消息 ───
     window.addEventListener('message', async ({ data: msg }) => {
       switch (msg.type) {
@@ -3473,9 +3689,9 @@
           if (msg.theme) {
             applyTheme(msg.theme);
           }
-          window.__m2a_current_title = currentTitle;
-          const publishTitleInput = document.getElementById('publish-title');
-          if (publishTitleInput && !publishTitleInput.value && currentTitle) publishTitleInput.value = currentTitle;
+          // 填充标题输入框（如果为空）
+          const titleInput = document.getElementById('input-title');
+          if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
           const coverTitleInput = document.getElementById('cover-title');
           if (coverTitleInput && !coverTitleInput.value && currentTitle) { coverTitleInput.value = currentTitle; if(typeof coverApplyPreview==='function') try{ coverApplyPreview(); }catch(_){} }
           // 内容更新后同步重建目录
@@ -3717,6 +3933,11 @@
           break;
         }
         case 'config': {
+          if (msg.appid)     document.getElementById('input-appid').value     = msg.appid;
+          if (msg.appSecret) document.getElementById('input-appsecret').value = msg.appSecret;
+          if (msg.author)    document.getElementById('input-author').value    = msg.author;
+          if (msg.digest)    document.getElementById('input-digest').value    = msg.digest;
+          // 应用全局默认正文宽度（仅当本页面没有更高优先级的已选值）
           if (msg.previewContentWidth && typeof applyContentWidth === 'function') {
             try {
               const st = (typeof vscode !== 'undefined' && vscode.getState) ? vscode.getState() : null;
@@ -3803,6 +4024,97 @@
           }
           break;
         }
+        case 'zhihuPublishStart': {
+          const btn = document.getElementById('btn-zhihu-do-publish');
+          btn.disabled = true; btn.textContent = '⏳ 发布中...';
+          document.getElementById('btn-zhihu-save-draft').disabled = true;
+          document.getElementById('zhihu-publish-result').style.display = 'none';
+          const prog = document.getElementById('zhihu-publish-progress');
+          prog.textContent = '准备中...';
+          prog.style.display = '';
+          break;
+        }
+        case 'zhihuPublishProgress': {
+          const prog = document.getElementById('zhihu-publish-progress');
+          prog.textContent = msg.message || '';
+          prog.style.display = '';
+          break;
+        }
+        case 'zhihuArticleId': {
+          if (msg.articleId) {
+            document.getElementById('zhihu-input-article-id').value = msg.articleId;
+          }
+          break;
+        }
+        case 'zhihuPublishResult': {
+          const btn = document.getElementById('btn-zhihu-do-publish');
+          btn.disabled = false; btn.textContent = '发布文章';
+          document.getElementById('btn-zhihu-save-draft').disabled = false;
+          document.getElementById('zhihu-publish-progress').style.display = 'none';
+          const res = document.getElementById('zhihu-publish-result');
+          if (msg.success) {
+            res.className = 'upload-result success';
+            res.innerHTML = `✅ 发布成功！<br><a href="${msg.url}" style="color:#4fc3f7;word-break:break-all;" title="${msg.url}">${msg.url}</a>`;
+            showToast('知乎发布成功！', 'success');
+            if (msg.articleId) {
+              document.getElementById('zhihu-input-article-id').value = msg.articleId;
+            }
+          } else {
+            res.className = 'upload-result error';
+            res.textContent = `❌ 发布失败：${msg.error || '未知错误'}`;
+            showToast('发布失败', 'error');
+          }
+          res.style.display = 'block';
+          break;
+        }
+        case 'zhihuDraftResult': {
+          const btn = document.getElementById('btn-zhihu-do-publish');
+          btn.disabled = false; btn.textContent = '发布文章';
+          document.getElementById('btn-zhihu-save-draft').disabled = false;
+          document.getElementById('zhihu-publish-progress').style.display = 'none';
+          const res = document.getElementById('zhihu-publish-result');
+          if (msg.success) {
+            res.className = 'upload-result success';
+            res.innerHTML = `📝 草稿已保存！<br><a href="${msg.editUrl}" style="color:#4fc3f7;">打开知乎草稿箱查看效果</a>`;
+            showToast('草稿保存成功！', 'success');
+            if (msg.articleId) {
+              document.getElementById('zhihu-input-article-id').value = msg.articleId;
+            }
+          } else {
+            res.className = 'upload-result error';
+            res.textContent = `❌ 保存草稿失败：${msg.error || '未知错误'}`;
+            showToast('保存草稿失败', 'error');
+          }
+          res.style.display = 'block';
+          break;
+        }
+
+        case 'uploadStart': {
+          const btn = document.getElementById('btn-do-upload');
+          btn.textContent = '上传中...';
+          btn.disabled = true;
+          const res = document.getElementById('upload-result');
+          res.style.display = 'none';
+          break;
+        }
+        case 'uploadResult': {
+          const btn = document.getElementById('btn-do-upload');
+          btn.textContent = '上传草稿箱';
+          btn.disabled = false;
+          const res = document.getElementById('upload-result');
+          if (msg.success) {
+            res.className = 'upload-result success';
+            res.textContent = `✅ 上传成功！media_id: ${msg.mediaId || '—'}`;
+            showToast('上传成功！', 'success');
+          } else {
+            res.className = 'upload-result error';
+            res.textContent = `❌ 上传失败：${msg.error || '未知错误'}`;
+            showToast('上传失败，请查看详情', 'error');
+          }
+          res.style.display = 'block';
+          break;
+        }
+
         case 'pptLlmInstruction': {
           const ta = document.getElementById('ppt-llm-instruction');
           if (ta) ta.value = msg.instruction || '';
@@ -5225,6 +5537,5 @@
     }, 50);
   })();
   </script>
-  <script src="../webview/publish-controls.js"></script>
 </body>
 </html>

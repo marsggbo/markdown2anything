@@ -3,6 +3,7 @@
 /**
  * CLI 的核心动作。**全部复用插件已有的 lib/ 和 scripts/**，不重写任何逻辑：
  *   lib/converter.js        Markdown → HTML
+ *   lib/zhihu.js            知乎干净发布 HTML（<pre lang> + eeimg 公式）
  *   lib/llm.js              LLM 文案生成（OpenAI 兼容）
  *   lib/extract.js          本地关键词提取（无需 API Key）
  *   lib/social.js           Cookie 管理 + Playwright 发布调度
@@ -27,14 +28,15 @@ const LIB  = path.join(ROOT, 'lib');
 
 const converter = require(path.join(LIB, 'converter'));
 const themes    = require(path.join(LIB, 'themes'));
+const zhihu     = require(path.join(LIB, 'zhihu'));
 const llm       = require(path.join(LIB, 'llm'));
 const extract   = require(path.join(LIB, 'extract'));
 const social    = require(path.join(LIB, 'social'));
 
 const store = require('./store');
 
-const PLATFORMS = ['xiaohongshu', 'twitter'];
-const ALIAS = { xhs: 'xiaohongshu', x: 'twitter', tw: 'twitter' };
+const PLATFORMS = ['xiaohongshu', 'twitter', 'zhihu'];
+const ALIAS = { xhs: 'xiaohongshu', x: 'twitter', tw: 'twitter', zh: 'zhihu' };
 const normPlatform = (p) => ALIAS[p] || p;
 
 // ─── 文章相关的路径约定（与插件保持一致）────────────────────
@@ -206,11 +208,19 @@ async function publish(md, platform, { mode = 'prepare', headless = false, log =
   }
 
   const meta = readMeta(md);
-  const content = currentCopy(md, platform) || localCopy(md, platform);
-  let images = listImages(md);
-  if (!images.length) {
-    log('  未检测到长图，正在自动导出…');
-    images = await exportImages(md, { log });
+  let content, images;
+
+  if (platform === 'zhihu') {
+    const { bodyHtml } = converter.renderMarkdown(md);
+    content = { title: meta.title, html: zhihu.buildPublishHtml(bodyHtml) };
+    images  = listLocalImages(md);
+  } else {
+    content = currentCopy(md, platform) || localCopy(md, platform);
+    images  = listImages(md);
+    if (!images.length) {
+      log('  未检测到长图，正在自动导出…');
+      images = await exportImages(md, { log });
+    }
   }
 
   return social.publish(platform, {
@@ -228,7 +238,7 @@ function toHtml(md, target, theme = 'wechat') {
   const { bodyHtml } = converter.renderMarkdown(md);
   const th = themes.getTheme(theme);
   if (target === 'wechat') return converter.buildWechatCopyHtml(bodyHtml, null, th);
-  if (target === 'zhihu')  return converter.buildZhihuCopyHtml(bodyHtml, null, th);
+  if (target === 'zhihu')  return zhihu.buildPublishHtml(bodyHtml);
   if (target === 'xhs' || target === 'xiaohongshu') return converter.buildXhsCopyHtml(bodyHtml, th);
   throw new Error(`未知目标：${target}（可选 wechat / zhihu / xhs）`);
 }
