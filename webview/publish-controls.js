@@ -2,10 +2,16 @@
   'use strict';
 
   const targetNames = { wechat: '微信公众号', zhihu: '知乎', cnblogs: '博客园' };
+  const credentialNames = {
+    'publishing.wechat.appSecret': '微信公众号凭证',
+    'publishing.zhihu.browserCookies': '知乎登录状态',
+    'publishing.cnblogs.username': '博客园用户名',
+    'publishing.cnblogs.token': '博客园访问令牌',
+  };
   const stateNames = {
     pending: '等待中', preflighting: '检查中', acquiringAssets: '获取图片中', running: '处理中',
     readyForReview: '待审核', published: '已发布', unavailable: '不可用', failed: '失败',
-    partial: '部分完成', completed: '已完成', cancelled: '已取消', discarded: '已丢弃',
+    partial: '部分完成', completed: '已完成', cancelled: '已取消', discarded: '已丢弃', needsAttention: '需要处理',
   };
   let currentJobId = null;
   let preflightBinding = null;
@@ -57,7 +63,9 @@
     };
   }
   function request() {
-    return { targets: selectedTargets(), mode: 'prepare', autoAcknowledged: false, metadata: metadata(), options: options() };
+    const targets = selectedTargets();
+    const allOptions = options();
+    return { targets, mode: 'prepare', autoAcknowledged: false, metadata: metadata(), options: Object.fromEntries(targets.map(target => [target, allOptions[target]])) };
   }
   function clearList(id) { const element = byId(id); while (element && element.firstChild) element.removeChild(element.firstChild); return element; }
   function renderAssets(assets) {
@@ -81,7 +89,7 @@
       row.textContent = `${targetNames[target] || target}: ${stateNames[result.state] || result.state || '等待中'}`;
       list.appendChild(row);
     });
-    if (aggregate && aggregate.state === 'partial') showStatus('部分平台已完成，请检查失败项后重试。', 'partial');
+    if (aggregate && (aggregate.state === 'partial' || aggregate.summary === 'partialRetryable')) showStatus('部分平台已完成，请检查失败项后重试。', 'partial');
   }
   function updateCapability(capabilities) {
     const list = clearList('publish-capabilities');
@@ -107,6 +115,20 @@
     const title = byId('publish-title');
     if (title && !title.value && window.__m2a_current_title) title.value = window.__m2a_current_title;
   }
+  function requestCredential(slot, type) {
+    showStatus(`正在设置${credentialNames[slot] || '发布凭证'}。`);
+    post({ type, slot });
+  }
+  function savePublishConfig() {
+    post({
+      type: 'publishSaveConfig',
+      config: {
+        appid: byId('publish-wechat-appid').value.trim(),
+        cnblogsBlogId: byId('publish-cnblogs-blog-id').value.trim(),
+        cnblogsBlogSlug: byId('publish-cnblogs-blog-slug').value.trim(),
+      },
+    });
+  }
   function initialize() {
     const root = byId('publish-controls-root');
     if (!root) return;
@@ -125,6 +147,16 @@
         <label>摘要 <textarea id="publish-digest" maxlength="4096"></textarea></label>
         <div class="panel-actions"><button class="btn btn-secondary" id="publish-choose-cover">选择封面文件</button><span id="publish-cover-label">未选择封面</span></div>
       </div>
+      <details class="publish-section"><summary>账号与凭证</summary>
+        <label>微信公众号 AppID <input id="publish-wechat-appid" type="text" maxlength="256"></label>
+        <label>博客园博客 ID <input id="publish-cnblogs-blog-id" type="text" maxlength="256"></label>
+        <label>博客园博客 slug <input id="publish-cnblogs-blog-slug" type="text" maxlength="256"></label>
+        <div class="panel-actions"><button class="btn btn-secondary" id="publish-save-config">保存账号配置</button></div>
+        <div class="panel-actions"><button class="btn btn-secondary" id="publish-set-wechat-secret">设置公众号 AppSecret</button></div>
+        <div class="panel-actions"><button class="btn btn-secondary" id="publish-login-zhihu">登录知乎</button></div>
+        <div class="panel-actions"><button class="btn btn-secondary" id="publish-set-cnblogs-username">设置博客园用户名</button><button class="btn btn-secondary" id="publish-set-cnblogs-token">设置博客园令牌</button></div>
+        <p class="hint" id="publish-credential-status">凭证仅在主机安全存储中输入和保存。</p>
+      </details>
       <details class="publish-section"><summary>平台选项</summary>
         <label><input id="publish-wechat-comments" type="checkbox"> 允许微信评论</label>
         <label>知乎话题（最多三个，每行一个）<textarea id="publish-zhihu-topics" placeholder="https://www.zhihu.com/topic/..."></textarea></label>
@@ -166,6 +198,11 @@
       post({ type: 'publishConfirmAuto', jobId: currentJobId, preflightBinding, autoAcknowledged: true });
     });
     byId('publish-choose-cover').addEventListener('click', () => post({ type: 'publishChooseCoverFile' }));
+    byId('publish-save-config').addEventListener('click', savePublishConfig);
+    byId('publish-set-wechat-secret').addEventListener('click', () => requestCredential('publishing.wechat.appSecret', 'publishRequestCredentialEntry'));
+    byId('publish-login-zhihu').addEventListener('click', () => requestCredential('publishing.zhihu.browserCookies', 'publishBeginBrowserLogin'));
+    byId('publish-set-cnblogs-username').addEventListener('click', () => requestCredential('publishing.cnblogs.username', 'publishRequestCredentialEntry'));
+    byId('publish-set-cnblogs-token').addEventListener('click', () => requestCredential('publishing.cnblogs.token', 'publishRequestCredentialEntry'));
     ['wechat', 'zhihu', 'cnblogs'].forEach(target => byId(`publish-target-${target}`).addEventListener('change', resetAuto));
     document.querySelectorAll('[data-publish-launcher]').forEach(launcher => launcher.addEventListener('click', () => {
       if (window.closeAllDropdowns) window.closeAllDropdowns();
@@ -190,13 +227,15 @@
       if (message.jobId) currentJobId = message.jobId;
       renderTargets(message.targets, message.aggregate);
       if (message.job && message.job.assets) renderAssets(message.job.assets);
-      const state = message.aggregate && message.aggregate.state || message.job && message.job.status;
+      const state = message.aggregate && (message.aggregate.state || (message.aggregate.summary === 'partialRetryable' ? 'partial' : message.aggregate.status)) || message.job && message.job.status;
       if (state) showStatus(stateNames[state] || state, state);
     } else if (message.type === 'publishCoverFileResult') {
       if (message.selection) {
         cover = { kind: 'fileSelection', selectionId: message.selection.selectionId };
         setText('publish-cover-label', message.selection.label || '已选择封面');
       } else showStatus('未选择封面文件。');
+    } else if (message.type === 'publishCredentialResult') {
+      setText('publish-credential-status', message.cleared ? '凭证已从安全存储中移除。' : message.available ? `${credentialNames[message.slot] || '发布凭证'}已保存到安全存储。` : '未保存凭证。');
     } else if (message.type === 'publishError') {
       resetAuto();
       showStatus(`发布操作失败：${message.code || 'INVALID_PUBLISH_REQUEST'}`, 'failed');

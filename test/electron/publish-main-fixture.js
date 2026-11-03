@@ -1,5 +1,4 @@
 'use strict';
-const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -30,6 +29,11 @@ function fakeSafeStorage(backend) {
     if (fs.existsSync(cookiePath)) throw new Error('legacy cookie file remained after readback');
     if (await secure.store.get('publishing.wechat.appSecret') !== 'migration-value') throw new Error('encrypted secret readback failed');
     if ((fs.statSync(secure.secretPath).mode & 0o077) !== 0) throw new Error('secret file is not private');
+    const revision = await secure.store.getRevision('publishing.wechat.appSecret');
+    const restarted = createElectronSecretStore({ userData: root, safeStorage: fakeSafeStorage() });
+    if (await restarted.store.getRevision('publishing.wechat.appSecret') !== revision) throw new Error('credential revision did not survive restart');
+    const changed = await restarted.store.set('publishing.wechat.appSecret', 'changed-value');
+    if (changed.revision === revision || await createElectronSecretStore({ userData: root, safeStorage: fakeSafeStorage() }).store.getRevision('publishing.wechat.appSecret') !== changed.revision) throw new Error('changed credential revision did not persist');
 
     const unavailable = createElectronSecretStore({ userData: path.join(root, 'unavailable'), safeStorage: { isEncryptionAvailable: () => false } });
     if (unavailable.available) throw new Error('unavailable secure storage was accepted');
@@ -42,13 +46,18 @@ function fakeSafeStorage(backend) {
     const state = { currentFilePath: articlePath, documentDirty: false, savedDocumentHash: sha256(article), config: { appid: 'app-id' }, mainWindow: null };
     const services = createElectronPublishingServices({
       state, dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) }, shell: { openExternal: () => {} }, secure, configPath, userData: root,
+      promptCredential: async slot => slot === 'publishing.cnblogs.username' ? 'user' : 'token',
+      browserLogin: async () => JSON.stringify([{ name: 'z_c0', value: 'browser-cookie', domain: '.zhihu.com', path: '/', expires: -1 }]),
     });
     const saved = await services.readDocument();
     if (saved.dirty || saved.content !== article) throw new Error('saved document was not available');
     services.markDirty('# Changed');
     if (!(await services.readDocument()).dirty) throw new Error('dirty editor content was accepted');
+    if (!(await services.requestCredentialEntry('publishing.cnblogs.username', 'publishRequestCredentialEntry')).available) throw new Error('host credential entry was unavailable');
+    if (!(await services.requestCredentialEntry('publishing.zhihu.browserCookies', 'publishBeginBrowserLogin')).available) throw new Error('host browser login enrollment was unavailable');
+    if (await secure.store.get('publishing.cnblogs.username') !== 'user') throw new Error('host credential was not securely stored');
     const configText = fs.readFileSync(configPath, 'utf8');
-    if (configText.includes('migration-value') || configText.includes('migration-cookie')) throw new Error('secret leaked to config');
+    if (configText.includes('migration-value') || configText.includes('migration-cookie') || configText.includes('browser-cookie')) throw new Error('secret leaked to config');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

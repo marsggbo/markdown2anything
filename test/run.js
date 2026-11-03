@@ -29,7 +29,7 @@ function run(name, fn) {
 }
 
 function sh(cmd) {
-  execSync(cmd, { cwd: root, stdio: 'pipe', encoding: 'utf8' });
+  execSync(cmd, { cwd: root, stdio: 'inherit', encoding: 'utf8' });
 }
 
 const mode = process.argv[2] || 'all';
@@ -87,11 +87,10 @@ if (mode === 'all' || mode === 'ui') {
     run(`ui/${f}`, () => {
       try {
         execSync(`node "${path.join(uiDir, f)}"`, {
-          cwd: root, stdio: 'pipe', encoding: 'utf8', env: { ...process.env },
+          cwd: root, stdio: 'inherit', encoding: 'utf8', env: { ...process.env },
         });
       } catch (e) {
-        const out = (e.stdout || '') + (e.stderr || '');
-        throw new Error(out.split('\n').filter(l => l.includes('✗') || l.includes('ERROR')).slice(0, 5).join(' | ') || out.slice(0, 300));
+        throw new Error(e.message);
       }
     });
   }
