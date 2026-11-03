@@ -10,8 +10,6 @@ const crypto = require('crypto');
 const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtmlByMode, inlineRemoteImages } = require('./lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('./lib/themes');
 const { createPublishingRuntime, registerVsCodePublishing } = require('./lib/publishing/host-entry');
-const { BrowserClient } = require('./lib/publishing/browser-client');
-const { loadBundledProfiles } = require('./lib/publishing/profiles');
 const { SecretStore, validateZhihuCookies } = require('./lib/publishing/secrets');
 const { PUBLISH_COMMANDS } = require('./lib/publishing/messages');
 const llm = require('./lib/llm');
@@ -183,8 +181,6 @@ async function handlePreview(uri) {
   // 面板关闭时清理
   panel.onDidDispose(() => {
     previewPanels.delete(mdPath);
-    const publishing = publishingPanels.get(panel);
-    if (publishing) { publishing.dispose(); publishingPanels.delete(panel); }
     const t = debounceTimers.get(mdPath);
     if (t) { clearTimeout(t); debounceTimers.delete(mdPath); }
   }, null, extContext.subscriptions);
@@ -378,8 +374,6 @@ function getPublishingHandler(panel, mdPath) {
   if (existing) return existing;
   const selections = new Map();
   const secrets = publishingSecrets();
-  const browserClient = new BrowserClient({ execPath: process.execPath, environment: process.env });
-  const zhihuProfile = loadBundledProfiles().find(entry => entry.profile.providerPath === 'zhihu-browser').profile;
   const services = {
     jobRoot: path.join(extContext.globalStorageUri.fsPath, 'publishing', 'jobs'),
     readDocument: async () => {
@@ -405,43 +399,29 @@ function getPublishingHandler(panel, mdPath) {
     },
     getTargetContext: async target => {
       const cfg = vscode.workspace.getConfiguration('markdown2anything');
-      const credentialSlots = target === 'wechat' ? ['publishing.wechat.appSecret']
-        : target === 'zhihu' ? ['publishing.zhihu.browserCookies']
-          : ['publishing.cnblogs.username', 'publishing.cnblogs.token'];
+      const slot = target === 'wechat' ? 'publishing.wechat.appSecret' : target === 'zhihu' ? 'publishing.zhihu.browserCookies' : 'publishing.cnblogs.token';
       return {
-        account: target === 'wechat' ? { appId: cfg.get('appid', '') } : target === 'cnblogs' ? { blogId: cfg.get('cnblogs.blogId', ''), blogSlug: cfg.get('cnblogs.blogSlug', '') } : null,
+        account: target === 'wechat' ? { appId: cfg.get('appid', '') } : null,
         config: { wechat: { appId: cfg.get('appid', '') } },
-        credentialSlots,
         getSecret: value => secrets.get(value),
-        getCredentialRevision: slot => secrets.getRevision(slot),
+        getCredentialRevision: () => secrets.getRevision(slot),
       };
     },
     savePublishConfig: async config => {
-      const cfg = vscode.workspace.getConfiguration('markdown2anything');
-      if (config && typeof config.appid === 'string') await cfg.update('appid', config.appid, vscode.ConfigurationTarget.Global);
-      if (config && typeof config.cnblogsBlogId === 'string') await cfg.update('cnblogs.blogId', config.cnblogsBlogId, vscode.ConfigurationTarget.Global);
-      if (config && typeof config.cnblogsBlogSlug === 'string') await cfg.update('cnblogs.blogSlug', config.cnblogsBlogSlug, vscode.ConfigurationTarget.Global);
+      if (!config || typeof config.appid !== 'string') return;
+      await vscode.workspace.getConfiguration('markdown2anything').update('appid', config.appid, vscode.ConfigurationTarget.Global);
     },
-    requestCredentialEntry: async (slot, command) => {
-      if (command === 'publishBeginBrowserLogin') {
-        if (slot !== 'publishing.zhihu.browserCookies') return { available: false };
-        const result = await browserClient.login({ profile: zhihuProfile });
-        await secrets.set(slot, result.cookies);
-        return { available: true };
-      }
-      const username = slot === 'publishing.cnblogs.username';
-      const value = await vscode.window.showInputBox({ prompt: username ? '输入博客园用户名' : '输入发布凭证', password: !username, ignoreFocusOut: true });
-      if (value === undefined || !value) return { available: false };
+    requestCredentialEntry: async slot => {
+      const value = await vscode.window.showInputBox({ prompt: '输入发布凭证', password: true, ignoreFocusOut: true });
+      if (value === undefined) return { available: false };
       await secrets.set(slot, value);
       return { available: true };
     },
     clearCredential: slot => secrets.delete(slot),
     openReviewUrl: url => vscode.env.openExternal(vscode.Uri.parse(url)),
   };
-  const runtime = createPublishingRuntime(services, { browserClient, browserClientOptions: { execPath: process.execPath, environment: process.env } });
+  const runtime = createPublishingRuntime(services, { browserClientOptions: { execPath: process.execPath, environment: process.env } });
   const registration = registerVsCodePublishing(runtime, services, event => panel.webview.postMessage(event));
-  const dispose = registration.dispose;
-  registration.dispose = () => { browserClient.close(); dispose(); };
   publishingPanels.set(panel, registration);
   return registration;
 }
@@ -2115,8 +2095,9 @@ function publishingSecrets() {
   if (!publishingSecretStore) {
     publishingSecretStore = new SecretStore({
       availability: async () => ({ available: true }),
-      getRecord: slot => extContext.secrets.get(slot),
-      setRecord: (slot, record) => extContext.secrets.store(slot, JSON.stringify({ version: 1, value: record.value, revision: record.revision })),
+      get: slot => extContext.secrets.get(slot),
+      set: (slot, value) => extContext.secrets.store(slot, value),
+      delete: slot => extContext.secrets.delete(slot),
     });
   }
   return publishingSecretStore;

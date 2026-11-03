@@ -17,7 +17,6 @@ function workerError(code) {
 }
 function send(message) { if (typeof process.send === 'function') process.send(message); }
 function result(value) { send({ type: 'publishBrowserResult', result: value }); }
-function loginResult(value) { send({ type: 'publishBrowserLoginResult', result: value }); }
 function failure(error) { send({ type: 'publishBrowserError', error: { code: error && error.code || 'BROWSER_PREPARE_FAILED' } }); }
 function progress(assetId, state) { send({ type: 'publishBrowserProgress', assetId, state }); }
 function normalize(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
@@ -145,43 +144,16 @@ async function prepare(payload) {
   }
 }
 
-async function browserLogin(payload) {
-  if (!payload || !payload.profile) throw workerError('INVALID_PUBLISH_REQUEST');
-  requireAvailable(payload.profile);
-  browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext();
-  try {
-    const page = await context.newPage();
-    await page.goto(payload.profile.startUrl, { waitUntil: 'domcontentloaded', timeout: payload.profile.timeouts.navigationMs });
-    if (await firstVisible(page, payload.profile.selectors.login)) {
-      await page.waitForFunction(selectors => !selectors.some(selector => {
-        const element = document.querySelector(selector);
-        return element && !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
-      }), payload.profile.selectors.login, { timeout: payload.profile.timeouts.loginMs || 300000 });
-    }
-    const value = validateZhihuCookies(await context.cookies('https://www.zhihu.com'));
-    cookies = value;
-    return { cookies: value };
-  } catch (error) {
-    if (error && error.code) throw error;
-    throw workerError('BROWSER_LOGIN_FAILED');
-  } finally {
-    await context.close().catch(() => {});
-    if (browser) { await browser.close().catch(() => {}); browser = null; }
-  }
-}
-
 if (typeof process.send === 'function') {
   process.on('message', async message => {
     try {
       if (!message || typeof message !== 'object') return;
       if (message.type === 'publishBrowserCredentials') { cookies = validateZhihuCookies(message.cookies); return; }
       if (message.type === 'publishBrowserPrepare') { result(await prepare(message.payload)); return; }
-      if (message.type === 'publishBrowserLogin') { loginResult(await browserLogin(message.payload)); return; }
       if (message.type === 'publishBrowserClose') { if (browser) await browser.close().catch(() => {}); process.disconnect(); }
     } catch (error) { failure(error); }
   });
   send({ type: 'workerReady' });
 }
 
-module.exports = { normalize, expectedBody, completeAssetResults, prepare, browserLogin };
+module.exports = { normalize, expectedBody, completeAssetResults, prepare };

@@ -111,16 +111,6 @@
           "default": "",
           "description": "微信公众号 AppID（用于官方草稿箱发布）"
         },
-        "markdown2anything.cnblogs.blogId": {
-          "type": "string",
-          "default": "",
-          "description": "博客园 MetaWeblog 博客 ID（用于草稿发布）"
-        },
-        "markdown2anything.cnblogs.blogSlug": {
-          "type": "string",
-          "default": "",
-          "description": "博客园博客 slug（用于 MetaWeblog 端点）"
-        },
         "markdown2anything.author": {
           "type": "string",
           "default": "",

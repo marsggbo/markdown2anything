@@ -5,8 +5,6 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createPublishingRuntime, registerElectronPublishing } = require('../lib/publishing/host-entry');
-const { BrowserClient } = require('../lib/publishing/browser-client');
-const { loadBundledProfiles } = require('../lib/publishing/profiles');
 const { SecretStore, validateZhihuCookies } = require('../lib/publishing/secrets');
 const { sha256 } = require('../lib/publishing/model');
 const { renderMarkdown, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml } = require('../lib/converter');
@@ -63,36 +61,34 @@ function legacyCookieValue(value) {
     httpOnly: false, secure: true, sameSite: 'Lax',
   }]));
 }
-function storedSecretRecord(value) {
-  try {
-    const record = JSON.parse(value);
-    if (record && record.version === 1 && Object.prototype.hasOwnProperty.call(record, 'value')) return record;
-  } catch (_) {}
-  return { value, revision: null };
-}
 
 function createElectronSecretStore({ userData, safeStorage, fileSystem = fs }) {
   const root = path.join(userData, PUBLISHING_DIR);
   const secretPath = path.join(root, SECRET_FILE);
   const available = safeStorageAvailable(safeStorage);
-  const read = () => readJson(secretPath, { version: 1, values: {} });
-  const write = value => atomicWriteVerified(secretPath, JSON.stringify(value), 0o600);
   const port = {
     availability: async () => available ? { available: true } : { available: false, reason: 'SECURE_STORAGE_UNAVAILABLE' },
-    getRecord: async slot => {
+    get: async slot => {
       if (!available) return null;
-      const saved = read();
+      const saved = readJson(secretPath, { version: 1, values: {} });
       const encoded = saved.values && saved.values[slot];
       if (typeof encoded !== 'string') return null;
-      try { return storedSecretRecord(safeStorage.decryptString(Buffer.from(encoded, 'base64'))); } catch (_) { throw bootstrapError('SECURE_STORAGE_UNAVAILABLE'); }
+      try { return safeStorage.decryptString(Buffer.from(encoded, 'base64')); } catch (_) { throw bootstrapError('SECURE_STORAGE_UNAVAILABLE'); }
     },
-    setRecord: async (slot, record) => {
+    set: async (slot, value) => {
       if (!available) throw bootstrapError('SECURE_STORAGE_UNAVAILABLE');
-      const saved = read();
+      const saved = readJson(secretPath, { version: 1, values: {} });
       saved.version = 1;
       saved.values = saved.values && typeof saved.values === 'object' ? saved.values : {};
-      saved.values[slot] = safeStorage.encryptString(JSON.stringify({ version: 1, value: record.value, revision: record.revision })).toString('base64');
-      write(saved);
+      saved.values[slot] = safeStorage.encryptString(value).toString('base64');
+      atomicWriteVerified(secretPath, JSON.stringify(saved), 0o600);
+    },
+    delete: async slot => {
+      if (!available) throw bootstrapError('SECURE_STORAGE_UNAVAILABLE');
+      const saved = readJson(secretPath, { version: 1, values: {} });
+      if (!saved.values || typeof saved.values !== 'object') saved.values = {};
+      delete saved.values[slot];
+      atomicWriteVerified(secretPath, JSON.stringify(saved), 0o600);
     },
   };
   return { store: new SecretStore(port), available, secretPath, root };
@@ -128,9 +124,8 @@ function createElectronPublishingServices(options) {
   const configPath = options.configPath;
   const userData = options.userData;
   const secretStore = secure.store;
+  const revisions = new Map();
   const selections = new Map();
-  const promptCredential = options.promptCredential || (async () => null);
-  const browserLogin = options.browserLogin || (async () => null);
   function currentDocument() {
     if (!state.currentFilePath || state.documentDirty || !state.savedDocumentHash) return { dirty: true };
     let content;
@@ -155,13 +150,7 @@ function createElectronPublishingServices(options) {
     return selection.path;
   }
   function publishConfig() {
-    return {
-      wechat: { appId: typeof state.config.appid === 'string' ? state.config.appid : '' },
-      cnblogs: {
-        blogId: typeof state.config.cnblogsBlogId === 'string' ? state.config.cnblogsBlogId : '',
-        blogSlug: typeof state.config.cnblogsBlogSlug === 'string' ? state.config.cnblogsBlogSlug : '',
-      },
-    };
+    return { wechat: { appId: typeof state.config.appid === 'string' ? state.config.appid : '' } };
   }
   return {
     jobRoot: path.join(userData, PUBLISHING_DIR, 'jobs'),
@@ -169,31 +158,18 @@ function createElectronPublishingServices(options) {
     readDocument: async () => currentDocument(),
     chooseCoverFile,
     resolveCoverSelection,
-    getTargetContext: async target => {
-      const slots = target === 'wechat' ? ['publishing.wechat.appSecret']
-        : target === 'zhihu' ? ['publishing.zhihu.browserCookies']
-          : ['publishing.cnblogs.username', 'publishing.cnblogs.token'];
-      return {
-        account: target === 'wechat' ? { appId: publishConfig().wechat.appId } : target === 'cnblogs' ? publishConfig().cnblogs : null,
-        config: publishConfig(),
-        credentialSlots: slots,
-        getSecret: slot => secretStore.get(slot),
-        getCredentialRevision: slot => secretStore.getRevision(slot),
-      };
-    },
+    getTargetContext: async target => ({
+      account: target === 'wechat' ? { appId: publishConfig().wechat.appId } : null,
+      config: publishConfig(),
+      getSecret: slot => secretStore.get(slot),
+      getCredentialRevision: slot => secretStore.getRevision(slot),
+    }),
     savePublishConfig: async config => {
       const incoming = config && typeof config === 'object' ? config : {};
-      for (const key of ['appid', 'cnblogsBlogId', 'cnblogsBlogSlug']) if (typeof incoming[key] === 'string') state.config[key] = incoming[key];
+      if (typeof incoming.appid === 'string') state.config.appid = incoming.appid;
       atomicWriteVerified(configPath, JSON.stringify(state.config, null, 2) + '\n', 0o600);
     },
-    requestCredentialEntry: async (slot, command) => {
-      const value = command === 'publishBeginBrowserLogin'
-        ? slot === 'publishing.zhihu.browserCookies' ? await browserLogin() : null
-        : await promptCredential(slot);
-      if (!value) return { available: false };
-      await secretStore.set(slot, value);
-      return { available: true };
-    },
+    requestCredentialEntry: async () => ({ available: false }),
     clearCredential: slot => secretStore.delete(slot),
     openReviewUrl: url => shell.openExternal(url),
     rememberSavedDocument(content) {
@@ -203,40 +179,8 @@ function createElectronPublishingServices(options) {
     markDirty(content) {
       state.documentDirty = sha256(content) !== state.savedDocumentHash;
     },
+    recordCredentialRevision: async slot => { revisions.set(slot, await secretStore.getRevision(slot)); return revisions.get(slot); },
   };
-}
-
-function createElectronCredentialPrompt({ BrowserWindow, ipcMain, parentWindow }) {
-  const pending = new Map();
-  const channel = 'publishingCredentialSubmit';
-  ipcMain.on(channel, (event, message) => {
-    if (!message || typeof message !== 'object' || typeof message.sessionId !== 'string') return;
-    const request = pending.get(message.sessionId);
-    if (!request || request.window.webContents.id !== event.sender.id) return;
-    const value = typeof message.value === 'string' && Buffer.byteLength(message.value, 'utf8') <= 64 * 1024 ? message.value : null;
-    pending.delete(message.sessionId);
-    if (!request.window.isDestroyed()) request.window.close();
-    request.resolve(value);
-  });
-  return () => new Promise(resolve => {
-    const sessionId = crypto.randomBytes(18).toString('base64url');
-    const window = new BrowserWindow({
-      width: 440, height: 220, resizable: false, modal: true, parent: parentWindow(),
-      webPreferences: { preload: path.join(__dirname, 'credential-entry-preload.js'), nodeIntegration: false, contextIsolation: true },
-    });
-    const finish = value => {
-      if (!pending.has(sessionId)) return;
-      pending.delete(sessionId);
-      resolve(value);
-    };
-    pending.set(sessionId, { window, resolve: finish });
-    window.on('closed', () => finish(null));
-    window.loadFile(path.join(__dirname, 'credential-entry.html'), { query: { sessionId } });
-  });
-}
-
-function zhihuBrowserProfile() {
-  return loadBundledProfiles().find(entry => entry.profile.providerPath === 'zhihu-browser').profile;
 }
 
 function writeSavedDocument(filePath, content) {
@@ -252,9 +196,7 @@ function bootElectronApp(overrides) {
   const configPath = path.join(userData, 'config.json');
   const cookiePath = path.join(userData, LEGACY_COOKIE_FILE);
   let publishing;
-  let publishingServices;
   let publishRegistration;
-  let browserClient;
 
   function send(channel, payload) {
     if (state.mainWindow && !state.mainWindow.isDestroyed()) state.mainWindow.webContents.send(channel, payload);
@@ -263,17 +205,17 @@ function bootElectronApp(overrides) {
     const file = path.join(os.tmpdir(), `m2a_render_${crypto.randomUUID()}.md`);
     try { fs.writeFileSync(file, text || '', 'utf8'); const output = renderMarkdown(file); state.lastBodyHtml = output.bodyHtml; state.lastRawMarkdown = output.rawMarkdown; const theme = getTheme(state.currentThemeId); send('update', { bodyHtml: output.bodyHtml, title: output.title, theme: { id: theme.id, css: theme.css, wrapperBg: theme.wrapperBg } }); } catch (error) { send('error', { message: error.message }); } finally { try { fs.unlinkSync(file); } catch (_) {} }
   }
+  function renderSaved() { if (!state.currentFilePath) return; try { renderFromText(fs.readFileSync(state.currentFilePath, 'utf8')); } catch (error) { send('error', { message: error.message }); } }
   function createWindow() {
-    state.mainWindow = new BrowserWindow({ width: 1400, height: 900, minWidth: 900, minHeight: 600, show: !process.env.M2A_HEADLESS, webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true, sandbox: false } });
+    state.mainWindow = new BrowserWindow({ width: 1400, height: 900, minWidth: 900, minHeight: 600, show: !process.env.M2A_HEADLESS, webPreferences: { preload: path.join(__dirname, 'preload.js'), nodeIntegration: false, contextIsolation: true } });
     state.mainWindow.loadFile(path.join(__dirname, 'panel.html'));
-    if (process.env.M2A_PUBLISH_BRIDGE_FIXTURE === '1') state.mainWindow.webContents.once('did-finish-load', () => state.mainWindow.webContents.executeJavaScript('window.__m2aHostReady = true;', true).catch(() => {}));
     state.mainWindow.on('closed', () => { state.mainWindow = null; });
   }
   function openFile() {
     return dialog.showOpenDialog(state.mainWindow, { title: '打开 Markdown 文件', filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'txt'] }], properties: ['openFile'] }).then(result => {
       if (result.canceled || !result.filePaths.length) return null;
       const filePath = result.filePaths[0]; const content = fs.readFileSync(filePath, 'utf8');
-      state.currentFilePath = filePath; publishingServices.rememberSavedDocument(content); renderFromText(content);
+      state.currentFilePath = filePath; publishing.rememberSavedDocument(content); renderFromText(content);
       return { content, filePath, fileName: path.basename(filePath), dirName: path.dirname(filePath) };
     });
   }
@@ -281,15 +223,9 @@ function bootElectronApp(overrides) {
   app.whenReady().then(async () => {
     state.config = readJson(configPath, {});
     const secure = await migrateElectronSecrets({ userData, safeStorage, configPath, cookiePath });
-    browserClient = new BrowserClient({ execPath: process.execPath, environment: process.env });
-    const credentialPrompt = createElectronCredentialPrompt({ BrowserWindow, ipcMain, parentWindow: () => state.mainWindow });
-    publishingServices = createElectronPublishingServices({
-      state, dialog, shell, secure, configPath, userData,
-      promptCredential: credentialPrompt,
-      browserLogin: async () => (await browserClient.login({ profile: zhihuBrowserProfile() })).cookies,
-    });
-    publishing = createPublishingRuntime(publishingServices, { browserClient, browserClientOptions: { execPath: process.execPath, environment: process.env } });
-    publishRegistration = registerElectronPublishing(publishing, publishingServices, event => send(event.type, event));
+    const services = createElectronPublishingServices({ state, dialog, shell, secure, configPath, userData });
+    publishing = createPublishingRuntime(services, { browserClientOptions: { execPath: process.execPath, environment: process.env } });
+    publishRegistration = registerElectronPublishing(publishing, services, event => send(event.type, event));
     createWindow();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   });
@@ -300,16 +236,14 @@ function bootElectronApp(overrides) {
     const result = await dialog.showSaveDialog(state.mainWindow, { title: '保存 Markdown 文件', defaultPath: state.currentFilePath ? path.basename(state.currentFilePath) : 'untitled.md', filters: [{ name: 'Markdown', extensions: ['md'] }] });
     if (result.canceled || !result.filePath) return null;
     const saved = writeSavedDocument(result.filePath, String(content || ''));
-    state.currentFilePath = result.filePath;
-    if (publishingServices) publishingServices.rememberSavedDocument(saved);
-    renderFromText(saved);
+    state.currentFilePath = result.filePath; publishing && publishing.orchestrator && servicesRememberSaved(publishing, saved); state.savedDocumentHash = sha256(saved); state.documentDirty = false; renderFromText(saved);
     return { filePath: result.filePath, fileName: path.basename(result.filePath) };
   });
   ipcMain.handle('getAppPath', () => path.join(__dirname, '..'));
   ipcMain.on('saveFile', (_event, msg) => {
     const content = typeof msg === 'string' ? msg : msg && msg.content;
     if (!state.currentFilePath || typeof content !== 'string') return;
-    try { const saved = writeSavedDocument(state.currentFilePath, content); if (publishingServices) publishingServices.rememberSavedDocument(saved); renderFromText(saved); } catch (error) { send('error', { message: `保存失败: ${error.message}` }); }
+    try { const saved = writeSavedDocument(state.currentFilePath, content); state.savedDocumentHash = sha256(saved); state.documentDirty = false; renderFromText(saved); } catch (error) { send('error', { message: `保存失败: ${error.message}` }); }
   });
   ipcMain.on('editorContentChanged', (_event, msg) => { const content = typeof msg === 'string' ? msg : msg && msg.content; if (typeof content !== 'string') return; state.documentDirty = sha256(content) !== state.savedDocumentHash; renderFromText(content); });
   ipcMain.on('newFile', () => { state.currentFilePath = null; state.savedDocumentHash = null; state.documentDirty = true; renderFromText(''); });
@@ -322,7 +256,8 @@ function bootElectronApp(overrides) {
   ipcMain.on('savePreviewSetting', (_event, message) => { if (!message || message.key !== 'contentWidth') return; state.config.previewSettings = { ...(state.config.previewSettings || {}), contentWidth: Number(message.value) }; try { atomicWriteVerified(configPath, JSON.stringify(state.config, null, 2) + '\n', 0o600); send('savePreviewSettingDone', { key: message.key }); } catch (_) {} });
   const publishChannels = require('../lib/publishing/messages').PUBLISH_COMMANDS;
   publishChannels.forEach(channel => ipcMain.on(channel, (_event, message) => { if (publishRegistration) publishRegistration.dispatch(message); }));
-  return { state, get publishing() { return publishing; }, dispose: () => { if (browserClient) browserClient.close(); return publishRegistration && publishRegistration.dispose(); } };
+  return { state, get publishing() { return publishing; }, dispose: () => publishRegistration && publishRegistration.dispose() };
 }
+function servicesRememberSaved(_publishing, _content) {}
 
-module.exports = { bootElectronApp, createElectronSecretStore, migrateElectronSecrets, createElectronPublishingServices, createElectronCredentialPrompt, atomicWriteVerified, safeStorageAvailable, legacyCookieValue, writeSavedDocument };
+module.exports = { bootElectronApp, createElectronSecretStore, migrateElectronSecrets, createElectronPublishingServices, atomicWriteVerified, safeStorageAvailable, legacyCookieValue, writeSavedDocument };

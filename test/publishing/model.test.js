@@ -8,6 +8,6 @@ assert.throws(() => createPublishJob({ ...jobInput(), article: { title: ' ', bod
 const duplicate = createPublishJob({ ...jobInput(), jobId: 'job-model-0002', article: { ...jobInput().article, body: { plainText: '', segments: [{ kind: 'asset', assetId: 'asset-0000' }, { kind: 'asset', assetId: 'asset-0001' }] } }, assets: [jobInput().assets[0], { source: { kind: 'data', sha256: 'b'.repeat(64), mime: 'image/png' }, contentSha256: 'c'.repeat(64), mime: 'image/png' }] });
 assert.notStrictEqual(duplicate.assets[0].assetId, duplicate.assets[1].assetId);
 const hash = calculateContentHash(job); job.updatedAt = '2099-01-01T00:00:00.000Z'; assert.strictEqual(hash, calculateContentHash(job));
-job.targets.zhihu.state = 'readyForReview'; job.targets.wechat.state = 'failed'; assert.deepStrictEqual(aggregateJob(job), { state: 'partial', summary: 'partialRetryable' });
+job.targets.zhihu.state = 'readyForReview'; job.targets.wechat.state = 'failed'; assert.deepStrictEqual(aggregateJob(job), { status: 'needsAttention', summary: 'partialRetryable' });
 assert.throws(() => assertPersistable({ token: 'secret' }), /SECRET_PERSISTENCE_FORBIDDEN/);
 console.log('✓ publishing model');

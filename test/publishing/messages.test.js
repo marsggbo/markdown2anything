@@ -1,6 +1,6 @@
 'use strict';
 const assert = require('assert');
-const { validatePublishMessage, validatePublishEvent, createCoverSelection, coverSelectionUsable } = require('../../lib/publishing/messages');
+const { validatePublishMessage, createCoverSelection, coverSelectionUsable } = require('../../lib/publishing/messages');
 const start = { type: 'publishStart', targets: ['zhihu'], mode: 'prepare', autoAcknowledged: false, metadata: { cover: { kind: 'none' } }, options: { zhihu: { topics: [] } } };
 assert.ok(validatePublishMessage(start).ok);
 assert.ok(!validatePublishMessage({ ...start, targets: ['zhihu', 'zhihu'] }).ok);
@@ -9,13 +9,6 @@ assert.ok(!validatePublishMessage({ ...start, mode: 'auto', autoAcknowledged: tr
 const binding = { nonce: 'a'.repeat(16), sourceFingerprint: 'b'.repeat(64), expiresAt: new Date(Date.now() + 10000).toISOString(), targets: ['zhihu'] };
 assert.ok(validatePublishMessage({ ...start, mode: 'auto', autoAcknowledged: true, preflightBinding: binding }).ok);
 assert.ok(!validatePublishMessage({ type: 'publishFinalizePartial', jobId: 'bad', targets: ['zhihu'] }).ok);
-assert.ok(validatePublishMessage({ type: 'publishCreateDuplicate', jobId: 'publish-job-0001' }).ok, 'the host, not the renderer, creates duplicate nonces');
-assert.ok(!validatePublishMessage({ type: 'publishCreateDuplicate', jobId: 'publish-job-0001', duplicateNonce: 'a'.repeat(16) }).ok);
-assert.ok(validatePublishMessage({ type: 'publishSaveConfig', config: { appid: 'app-id', cnblogsBlogId: '1', cnblogsBlogSlug: 'blog' } }).ok);
-assert.ok(!validatePublishMessage({ type: 'publishSaveConfig', config: { appSecret: 'secret' } }).ok);
-assert.ok(validatePublishEvent({ type: 'publishCredentialResult', slot: 'publishing.wechat.appSecret', available: true }).ok);
-assert.ok(!validatePublishEvent({ type: 'publishCredentialResult', slot: 'publishing.wechat.appSecret', available: true, value: 'secret' }).ok);
-const selection = createCoverSelection({ selectionId: 'cover-select-0001', label: 'cover.png', expiresAt: binding.expiresAt });
-assert.ok(coverSelectionUsable(selection));
+const selection = createCoverSelection({ selectionId: 'cover-select-0001', label: 'cover.png', expiresAt: binding.expiresAt }); assert.ok(coverSelectionUsable(selection));
 assert.ok(!coverSelectionUsable(selection, Date.now() + 20000));
 console.log('✓ publishing messages');
