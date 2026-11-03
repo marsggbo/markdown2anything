@@ -1,0 +1,30 @@
+{
+  "id": "zhihu-browser-write-v1",
+  "version": "1",
+  "providerPath": "zhihu-browser",
+  "evidence": { "id": "zhihu-browser-editor", "url": "https://zhuanlan.zhihu.com/write" },
+  "draftSupported": true,
+  "autoSupported": false,
+  "limits": { "timeoutMs": 10000, "acceptedMimes": ["image/jpeg", "image/png", "image/gif", "image/webp"], "maxAssetBytes": 8388608, "maxResponseBytes": 1048576 },
+  "supportedFields": ["title", "body", "topics", "commentPermission", "tableOfContents", "creationDeclaration"],
+  "startUrl": "https://zhuanlan.zhihu.com/write",
+  "selectors": {
+    "title": ["input[placeholder*='标题']", "textarea[placeholder*='标题']"],
+    "editor": ["[contenteditable='true'][role='textbox']", ".Editable-content"],
+    "fileInput": ["input[type='file'][accept*='image']", "input[type='file']"],
+    "login": ["input[name='username']", "[data-za-detail-view-path-module='LoginForm']"],
+    "contentImages": ["[contenteditable='true'] img", ".Editable-content img"],
+    "uploadFailure": ["[data-testid*='upload-error']", ".UploadError"],
+    "pasteComplete": ["[data-m2a-paste-complete='true']"]
+  },
+  "predicates": {
+    "sourceImage": { "allowedHosts": ["zhimg.com", ".zhimg.com"], "excludeGenerated": true },
+    "titleNormalized": "trim-collapse-space", "bodyNormalized": "trim-collapse-space",
+    "paste": "marker-id-rebuild-and-exact-image-order",
+    "login": "any-login-selector-visible",
+    "upload": "observed-src-https-zhimg",
+    "final": "title-body-count-order-host-no-upload-error-paste-complete"
+  },
+  "timeouts": { "navigationMs": 10000, "selectorMs": 10000, "uploadMs": 10000, "pasteMs": 10000 },
+  "routes": {}
+}

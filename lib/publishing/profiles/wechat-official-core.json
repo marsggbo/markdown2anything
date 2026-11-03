@@ -1,0 +1,16 @@
+{
+  "id": "wechat-official-core",
+  "version": "1",
+  "providerPath": "wechat-official",
+  "evidence": { "id": "wechat-official-api", "url": "https://developers.weixin.qq.com/doc/service/api/" },
+  "draftSupported": true,
+  "autoSupported": false,
+  "limits": { "titleCodePoints": 32, "authorCodePoints": 16, "digestCodePoints": 120, "maxHtmlBytes": 1048576, "acceptedMimes": ["image/jpeg", "image/png", "image/gif", "image/webp"], "maxAssetBytes": 8388608 },
+  "supportedFields": ["title", "author", "digest", "body", "cover", "comments"],
+  "routes": {
+    "accessToken": { "method": "GET", "origin": "https://api.weixin.qq.com", "path": "/cgi-bin/token", "timeoutMs": 10000, "maxResponseBytes": 1048576, "retry": "never-after-response-loss", "query": { "grant_type": { "literal": "client_credential" }, "appid": { "source": "config.wechat.appId" }, "secret": { "secretSlot": "publishing.wechat.appSecret" } }, "response": { "token": "$.access_token", "errorCode": "$.errcode" }, "success": { "errorCode": "absent-or-zero", "required": ["token:nonEmptyString"] } },
+    "inlineImage": { "method": "POST", "origin": "https://api.weixin.qq.com", "path": "/cgi-bin/media/uploadimg", "timeoutMs": 10000, "maxResponseBytes": 1048576, "retry": "never-after-response-loss", "acceptedMimes": ["image/jpeg", "image/png", "image/gif", "image/webp"], "maxAssetBytes": 8388608, "query": { "access_token": { "source": "runtime.accessToken" } }, "multipart": { "media": { "source": "asset.cachePath", "filename": "asset.filename", "contentType": "asset.mime" } }, "response": { "url": "$.url", "errorCode": "$.errcode" }, "success": { "errorCode": "absent-or-zero", "required": ["url:absoluteHttps"] } },
+    "coverMaterial": { "method": "POST", "origin": "https://api.weixin.qq.com", "path": "/cgi-bin/material/add_material", "timeoutMs": 10000, "maxResponseBytes": 1048576, "retry": "never-after-response-loss", "acceptedMimes": ["image/jpeg", "image/png", "image/gif", "image/webp"], "maxAssetBytes": 8388608, "query": { "access_token": { "source": "runtime.accessToken" }, "type": { "literal": "image" } }, "multipart": { "media": { "source": "asset.cachePath", "filename": "asset.filename", "contentType": "asset.mime" } }, "response": { "mediaId": "$.media_id", "errorCode": "$.errcode" }, "success": { "errorCode": "absent-or-zero", "required": ["mediaId:nonEmptyString"] } },
+    "createDraft": { "method": "POST", "origin": "https://api.weixin.qq.com", "path": "/cgi-bin/draft/add", "timeoutMs": 10000, "maxResponseBytes": 1048576, "retry": "never-after-response-loss", "query": { "access_token": { "source": "runtime.accessToken" } }, "json": { "articles": [{ "title": { "source": "article.title" }, "author": { "source": "article.author", "omitWhenNull": true }, "digest": { "source": "article.digest", "omitWhenNull": true }, "content": { "source": "serialized.html" }, "thumb_media_id": { "source": "cover.mediaId" }, "need_open_comment": { "source": "options.comments.enabled", "encode": "booleanToInt", "omitWhenAbsent": true }, "only_fans_can_comment": { "source": "options.comments.fansOnly", "encode": "booleanToInt", "omitWhenAbsent": true } }] }, "response": { "draftId": "$.media_id", "errorCode": "$.errcode" }, "success": { "errorCode": "absent-or-zero", "required": ["draftId:nonEmptyString"] } }
+  }
+}

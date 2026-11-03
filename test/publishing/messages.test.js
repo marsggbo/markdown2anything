@@ -1,0 +1,14 @@
+'use strict';
+const assert = require('assert');
+const { validatePublishMessage, createCoverSelection, coverSelectionUsable } = require('../../lib/publishing/messages');
+const start = { type: 'publishStart', targets: ['zhihu'], mode: 'prepare', autoAcknowledged: false, metadata: { cover: { kind: 'none' } }, options: { zhihu: { topics: [] } } };
+assert.ok(validatePublishMessage(start).ok);
+assert.ok(!validatePublishMessage({ ...start, targets: ['zhihu', 'zhihu'] }).ok);
+assert.ok(!validatePublishMessage({ ...start, options: { zhihu: { topics: ['https://www.zhihu.com/topic/a', 'https://www.zhihu.com/topic/b', 'https://www.zhihu.com/topic/c', 'https://www.zhihu.com/topic/d'] } } }).ok);
+assert.ok(!validatePublishMessage({ ...start, mode: 'auto', autoAcknowledged: true }).ok, 'auto requires final binding');
+const binding = { nonce: 'a'.repeat(16), sourceFingerprint: 'b'.repeat(64), expiresAt: new Date(Date.now() + 10000).toISOString(), targets: ['zhihu'] };
+assert.ok(validatePublishMessage({ ...start, mode: 'auto', autoAcknowledged: true, preflightBinding: binding }).ok);
+assert.ok(!validatePublishMessage({ type: 'publishFinalizePartial', jobId: 'bad', targets: ['zhihu'] }).ok);
+const selection = createCoverSelection({ selectionId: 'cover-select-0001', label: 'cover.png', expiresAt: binding.expiresAt }); assert.ok(coverSelectionUsable(selection));
+assert.ok(!coverSelectionUsable(selection, Date.now() + 20000));
+console.log('✓ publishing messages');

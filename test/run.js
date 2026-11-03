@@ -57,6 +57,7 @@ if (mode === 'all' || mode === 'syntax') {
   for (const f of fs.readdirSync(logicDir)) {
     if (!/^(host_|render_chain)\.js$/.test(f) && !f.startsWith('host_')) continue;    run(f, () => sh(`node "${path.join(logicDir, f)}"`));
   }
+  run('publishing/run.js', () => sh('node test/publishing/run.js'));
 
   console.log('── webview/panel.html 检查 ──');
   run('内联脚本语法 (3 块)', () => {
