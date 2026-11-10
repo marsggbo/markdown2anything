@@ -124,13 +124,40 @@
       border: 1px solid #3a4048;
       box-shadow: none;
     }
+    .toolbar-zone-publish { flex-wrap: wrap; max-width: 100%; }
+    .toolbar-zone-publish > .btn-sync-publish {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: #30465d;
+      border-color: #597b9f;
+      color: #eff5fc;
+      transition: background-color .15s, border-color .15s;
+    }
+    .toolbar-zone-publish > .btn-sync-publish:hover {
+      background: #3a536d;
+      border-color: #7b9bbd;
+    }
+    .toolbar-zone-publish > .btn-sync-publish:active { background: #283d52; }
+    .toolbar-zone-publish > .btn-sync-publish:focus-visible {
+      outline: 2px solid #a9c9ed;
+      outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .toolbar-zone-publish > .btn-sync-publish { transition: none; }
+    }
     .toolbar-zone-publish .brand-glyph { font-weight: 800; margin-right: 5px; }
     .toolbar-zone-publish .btn svg,
     .toolbar-zone-publish .btn svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 5px; }
+    .toolbar-zone-publish > .btn-sync-publish svg { margin: 0; flex-shrink: 0; }
     .toolbar-zone-publish > .dropdown > #btn-dd-wechat { color: #6fdc9c; border-color: #2e6b47; }
     .toolbar-zone-publish > .dropdown > #btn-dd-wechat:hover { background: #24322c; border-color: #3a8a5c; }
     .toolbar-zone-publish > .dropdown > #btn-dd-zhihu { color: #83b2f6; border-color: #2f5f8f; }
     .toolbar-zone-publish > .dropdown > #btn-dd-zhihu:hover { background: #232c3a; border-color: #3d7bb8; }
+    .toolbar-zone-publish > .dropdown > #btn-dd-cnblogs { color: #9dbcf0; border-color: #465d87; }
+    .toolbar-zone-publish > .dropdown > #btn-dd-cnblogs:hover { background: #272d3a; border-color: #6384bc; }
     .toolbar-zone-publish > .dropdown > #btn-dd-xhs { color: #ff8fa0; border-color: #8a3040; }
     .toolbar-zone-publish > .dropdown > #btn-dd-xhs:hover { background: #3a2428; border-color: #b84855; }
     .toolbar-zone-publish > #btn-twitter { color: #83c5ee; border-color: #2f5f7a; }
@@ -935,11 +962,23 @@
       <!-- 区② 发布主操作 -->
       <div class="toolbar-zone toolbar-zone-publish">
 
+    <button class="btn btn-sync-publish" id="btn-sync-publish" title="一键同步到公众号草稿箱、知乎和博客园；同步前会弹出原生确认对话框">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 12h9M13 5v14M13 5h7M13 12h7M13 19h7M17 2l3 3-3 3M17 9l3 3-3 3M17 16l3 3-3 3"/><circle cx="4" cy="12" r="2" fill="currentColor" stroke="none"/></svg>
+      <span>多平台同步</span>
+    </button>
+
     <!-- 🟢 微信 ▼ -->
     <div class="dropdown" id="dd-wechat">
       <button class="btn btn-primary dropdown-trigger" id="btn-dd-wechat"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M9.04 4.29C5.18 4.29 2 7.13 2 10.71c0 1.83.92 3.48 2.4 4.6L3.7 18l3.36-1.64c.63.17 1.3.27 1.98.27h.3c-.16-.54-.25-1.11-.25-1.7 0-3.15 2.63-5.71 5.88-5.71.28 0 .56.02.83.06-.62-3.53-3.65-5.99-6.76-5.99z"/><path d="M14.77 10.57c-3.17 0-5.75 2.41-5.75 5.38s2.58 5.38 5.75 5.38c.68 0 1.34-.11 1.95-.31L19.97 23l-.76-2.38A5.37 5.37 0 0 0 20.52 15.95c0-2.97-2.58-5.38-5.75-5.38z"/></svg>微信</button>
       <div class="dropdown-menu" id="menu-wechat">
-        <div class="dropdown-section-label">操作方式</div>
+        <button class="dropdown-item" id="btn-sync-wechat">
+          <span class="dropdown-item-content">
+            <span class="item-label">同步与配置（官方接口）</span>
+            <span class="item-desc">一键同步到公众号草稿箱，同步前通过原生对话框确认</span>
+          </span>
+        </button>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-section-label">兼容 / 手动方式</div>
         <button class="dropdown-item" id="btn-copy">
           <span class="item-icon">📋</span>
           <span class="dropdown-item-content">
@@ -950,8 +989,8 @@
         <button class="dropdown-item" id="btn-upload">
           <span class="item-icon">☁️</span>
           <span class="dropdown-item-content">
-            <span class="item-label">上传到草稿箱</span>
-            <span class="item-desc">通过 API 直接推送到公众号草稿（需配置 AppID）</span>
+            <span class="item-label">上传到草稿箱（旧版第三方 FastPen）</span>
+            <span class="item-desc">兼容入口：经第三方 FastPen 服务上传，需配置旧版 AppID</span>
           </span>
         </button>
       </div>
@@ -961,7 +1000,14 @@
     <div class="dropdown" id="dd-zhihu">
       <button class="btn btn-zhihu dropdown-trigger" id="btn-dd-zhihu"><span class="brand-glyph">知</span>知乎</button>
       <div class="dropdown-menu" id="menu-zhihu">
-        <div class="dropdown-section-label">操作方式</div>
+        <button class="dropdown-item" id="btn-sync-zhihu">
+          <span class="dropdown-item-content">
+            <span class="item-label">同步与配置（官方接口）</span>
+            <span class="item-desc">一键通过官方接口同步到知乎，同步前通过原生对话框确认</span>
+          </span>
+        </button>
+        <div class="dropdown-divider"></div>
+        <div class="dropdown-section-label">兼容 / 手动方式</div>
         <button class="dropdown-item" id="btn-zhihu">
           <span class="item-icon">📋</span>
           <span class="dropdown-item-content">
@@ -972,8 +1018,21 @@
         <button class="dropdown-item" id="btn-zhihu-publish">
           <span class="item-icon">🚀</span>
           <span class="dropdown-item-content">
-            <span class="item-label">自动发布</span>
-            <span class="item-desc">打开浏览器，自动填充标题和正文（需登录）</span>
+            <span class="item-label">自动发布（旧版浏览器兼容）</span>
+            <span class="item-desc">兼容入口：打开浏览器，自动填充标题和正文（需登录）</span>
+          </span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 博客园 -->
+    <div class="dropdown" id="dd-cnblogs">
+      <button class="btn dropdown-trigger" id="btn-dd-cnblogs"><span class="brand-glyph">博</span>博客园</button>
+      <div class="dropdown-menu" id="menu-cnblogs">
+        <button class="dropdown-item" id="btn-sync-cnblogs">
+          <span class="dropdown-item-content">
+            <span class="item-label">同步与配置（官方接口）</span>
+            <span class="item-desc">一键保存草稿或发布到博客园，同步前通过原生对话框确认</span>
           </span>
         </button>
       </div>
@@ -1950,6 +2009,10 @@
 
   <script nonce="__M2A_NONCE__">
     const vscode = acquireVsCodeApi();
+    document.getElementById('btn-sync-publish').addEventListener('click', () => {
+      closeAllDropdowns();
+      vscode.postMessage({ type: 'openPublishing' });
+    });
     window.__m2a_vscode = vscode;
 
     // ─── 图标按钮悬浮提示（悬停 1 秒后显示）───
@@ -2531,6 +2594,7 @@
     const dropdownMenus = {
       wechat:  document.getElementById('menu-wechat'),
       zhihu:   document.getElementById('menu-zhihu'),
+      cnblogs: document.getElementById('menu-cnblogs'),
       xhs:     document.getElementById('menu-xhs'),
       export:  document.getElementById('menu-export'),
       more:    document.getElementById('menu-more'),
@@ -2568,6 +2632,12 @@
       closeAllDropdowns();
       if (!already) openDropdown('zhihu');
     });
+    document.getElementById('btn-dd-cnblogs').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const already = dropdownMenus.cnblogs.classList.contains('open');
+      closeAllDropdowns();
+      if (!already) openDropdown('cnblogs');
+    });
     document.getElementById('btn-dd-xhs').addEventListener('click', (e) => {
       e.stopPropagation();
       const already = dropdownMenus.xhs.classList.contains('open');
@@ -2597,6 +2667,14 @@
     ['btn-llm-config', 'btn-style', 'btn-cover', 'btn-settings'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.addEventListener('click', () => closeAllDropdowns());
+    });
+
+    // 单平台入口和多平台编排复用同一宿主及平台模块。
+    ['wechat', 'zhihu', 'cnblogs'].forEach(platform => {
+      document.getElementById('btn-sync-' + platform).addEventListener('click', () => {
+        closeAllDropdowns();
+        vscode.postMessage({ type: 'openPublishing', platform });
+      });
     });
 
     // ─── 微信 ───

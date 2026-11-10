@@ -34,32 +34,7 @@ function fail(m)   { out('ERROR:' + m); process.exit(1); }
 function step(done, total, label) { out(`PROGRESS:${done}/${total}:${label}`); }
 
 // ─── 查找 Chromium ──────────────────────────────────────────────────────────
-function findChromium() {
-  const home = os.homedir();
-  const cacheDir = path.join(home, '.cache', 'ms-playwright');
-  if (fs.existsSync(cacheDir)) {
-    for (const entry of fs.readdirSync(cacheDir).filter(e => e.startsWith('chromium'))) {
-      const cands = {
-        darwin: path.join(cacheDir, entry, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
-        linux:  path.join(cacheDir, entry, 'chrome-linux', 'chrome'),
-        win32:  path.join(cacheDir, entry, 'chrome-win', 'chrome.exe'),
-      };
-      const p = cands[process.platform];
-      if (p && fs.existsSync(p)) return p;
-    }
-  }
-  const system = {
-    darwin: [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-    ],
-    linux:  ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium-browser', '/usr/bin/chromium'],
-    win32:  ['C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'],
-  };
-  for (const p of (system[process.platform] || [])) if (fs.existsSync(p)) return p;
-  return null;
-}
+const { findChromium, launchOptions } = require('../lib/browser');
 
 // ─── 平台定义 ───────────────────────────────────────────────────────────────
 // 关键修复：小红书创作平台签发的是 creator 专属 cookie，不叫 web_session。
@@ -132,14 +107,14 @@ async function getBrowser(headless) {
   // ② 新开一个
   const executablePath = findChromium();
   if (!executablePath) { out('NEED_INSTALL'); process.exit(2); }
-  const browser = await chromium.launch({
+  const browser = await chromium.launch(launchOptions({
     executablePath,
     headless: !!headless,
     args: [
-      '--no-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled',
-      `--remote-debugging-port=${CDP_PORT[platform] || 9225}`,   // 开调试端口，供复用/续传
+      '--disable-blink-features=AutomationControlled',
+      `--remote-debugging-port=${CDP_PORT[platform] || 9225}`,
     ],
-  });
+  }));
   const context = await browser.newContext({
     viewport: { width: 1400, height: 950 },
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -243,14 +218,23 @@ async function doPublish(jobFile, resume) {
     } else if (platform === 'xiaohongshu') {
       await publishXiaohongshu(page, def, { title, body, tags, images, mode });
     } else if (platform === 'zhihu') {
-      await publishZhihu(page, def, { title, html: job.html || '', images, mode });
+      const url = await publishZhihu(page, def, {
+        title, html: job.html || '', mode, baseDir: job.baseDir,
+        articleId: job.articleId,
+        cache: job.zhihuImageCache || {},
+        onCache: cache => {
+          job.zhihuImageCache = cache;
+          fs.writeFileSync(jobFile, JSON.stringify(job), { encoding: 'utf8', mode: 0o600 });
+        },
+      });
+      if (mode === 'auto') out('PUBLISHED:' + url);
     }
 
     // 一律不自动关窗。默认 prepare 模式下也【不替用户点发布】——
     // 自动点发布在小红书上会撞到二次确认弹窗，反而导致"看着发了其实没发"。
     leaveOpen = true;
     if (mode === 'auto') {
-      out('PUBLISHED:');
+      if (platform !== 'zhihu') out('PUBLISHED:');
       info('✅ 已提交发布。浏览器保持打开，请自行确认结果后关闭窗口。');
     } else {
       out('READY_TO_PUBLISH');
@@ -588,205 +572,42 @@ function truncateByWeight(text, budget) {
   return out + '…';
 }
 
-// ─── 知乎：用编辑器自己的通道传图 + 粘贴干净 HTML ────────────────────────────
-/**
- * 知乎为什么必须走浏览器：
- *   知乎没有公开 API，且会主动改内部接口来搞挂第三方工具 —— 直接调 api.zhihu.com/images
- *   传图迟早（且已经）失效。用编辑器自己的上传通道，走的是它自家的正常流程，最稳。
- *
- * 流程：
- *   ① 打开 /write，填标题
- *   ② 把本地图片依次喂给编辑器的 file input，让【知乎自己】把图传上去，
- *      回读编辑器里生成的 <img> 的 CDN 地址（zhimg.com）
- *   ③ 清空编辑器，把 CDN 地址替换进我们那份干净 HTML
- *   ④ 通过剪贴板把 HTML 整体粘进编辑器（公式 eeimg / 代码 pre lang 都能被知乎识别）
- *   ⑤ 停在发布前，由用户自己点「发布」
- */
-
-async function publishZhihu(page, def, { title, html, images, mode }) {
+// 知乎浏览器后端：完整上传后粘贴一次正文，并回读确认。
+async function publishZhihu(page, def, { title, html, mode, baseDir, articleId, cache, onCache }) {
+  const { prepareEditor } = require('../lib/zhihu-browser');
+  if (!title.trim() || title.length > 100) throw new Error('知乎标题必须为 1～100 字，未自动截断');
+  if (articleId) throw new Error('浏览器后端暂不支持更新已有文章，请使用保存草稿入口');
   const totalSteps = 4;
   step(0, totalSteps, '打开知乎写文章页');
   await page.goto(def.publishUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
-
   if (def.loginUrlPattern.test(page.url())) throw new Error('知乎 cookie 已失效，请重新登录');
-
-  // ── 标题 ──
   const titleBox = page.locator('textarea[placeholder*="标题"], input[placeholder*="标题"]').first();
   await titleBox.waitFor({ state: 'visible', timeout: 40000 })
     .catch(() => { throw new Error('未找到标题输入框（页面结构可能已变化）'); });
-  await titleBox.click();
-  await titleBox.fill(String(title || '').slice(0, 100));
-  info('已填标题');
-
-  // ── 正文编辑器 ──
   const editor = page.locator('.public-DraftEditor-content, div[contenteditable="true"]').first();
   await editor.waitFor({ state: 'visible', timeout: 30000 })
     .catch(() => { throw new Error('未找到正文编辑器'); });
-
-  // ── ② 图片方案 ──
-  //
-  // 之前的本地图床方案不可行：把图片暴露成 http://127.0.0.1:PORT 后整篇粘贴，
-  // 知乎编辑器会把它们当"远程图片"【后端抓取】，而知乎服务器访问不到用户本机的
-  // 127.0.0.1 → 编辑器里所有图片都显示「上传失败」（诊断：Editable-imageUploader is-error）。
-  //
-  // 现在改成走编辑器自己的上传通道（和自动发布小红书同一套做法）：
-  //   a. 先通过编辑器的 file input 把本地图片逐张喂给知乎【自己的】上传流程，
-  //      回读知乎生成的 zhimg CDN 地址（这些图会先堆在编辑器末尾，无妨）
-  //   b. 拿到全部真实 URL 后【清空编辑器】，把 URL 回填进干净 HTML 重新整篇粘贴
-  //      —— 图片位置由 HTML 顺序决定，天然正确（不会再跑到文末/位置错乱）
-  //
-  // 为什么不能"粘贴占位段再原位替换"：知乎编辑器是 Draft.js，粘贴 HTML 时会
-  // 把自定义属性（如 data-m2a-img）剥离，占位段根本找不到 → 图全堆文末。
-  step(1, totalSteps, '准备图片');
-  const imgCount = (images && images.length) || 0;
-  const IMG_PLACEHOLDER = (i) => `__M2A_IMG_${i}__`;
-  // 先备份原始干净 HTML（图片 src 是 data URI）
-  let cleanHtml = html;
-  let finalHtml = html;
-
-  // ── ③ 粘贴正文（图片位置先留占位文本，避免知乎当成图去抓）──
-  if (imgCount > 0) {
-    let i = 0;
-    // 图片标签（含 figure 包裹）→ 占位文本
-    finalHtml = finalHtml
-      .replace(/<figure[^>]*>[\s\S]*?<\/figure>/g, (m) => /data:image/.test(m) ? IMG_PLACEHOLDER(i++) : m)
-      .replace(/<img[^>]*src="data:image[^"]*"[^>]*>/g, () => IMG_PLACEHOLDER(i++));
-  }
-  step(2, totalSteps, '粘贴正文');
-  const plain = finalHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-
-  await editor.click();
-  await editor.evaluate((el, { h, p }) => {
-    el.focus();
-    const dt = new DataTransfer();
-    dt.setData('text/html', h);
-    dt.setData('text/plain', p);
-    el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-  }, { h: finalHtml, p: plain }).catch(() => {});
-
-  await page.waitForTimeout(3000);
-
-  let got = (await editor.innerText().catch(() => '')) || '';
-  if (got.trim().length < Math.min(40, plain.length * 0.3)) {
-    await dumpDiag(page, 'zhihu_paste_failed');
-    throw new Error(`正文没能填进编辑器（只有 ${got.trim().length} 字，预期约 ${plain.length} 字）`);
-  }
-  info(`正文已填入（${got.trim().length} 字）`);
-
-  // ── ④ 上传图片：拿到全部真实 zhimg URL ──
-  let uploaded = [];           // 每个元素: { placeholder, url } 按图片顺序
-  let uploadFails = 0;
-  if (imgCount > 0) {
-    step(3, totalSteps, '上传图片');
-    const imgInputSel = 'input[type="file"][accept*="image/"]';
-    await page.locator(imgInputSel).first().waitFor({ state: 'attached', timeout: 20000 })
-      .catch(() => { throw new Error('未找到知乎编辑器的图片上传控件'); });
-
-    // 先把编辑器里可能已存在的 zhimg 图排除（避免误判为本次新上传）
-    const before = await editor.evaluate(el => {
-      const s = new Set();
-      el.querySelectorAll('img').forEach(x => s.add(x.getAttribute('src') || ''));
-      return [...s];
-    }).catch(() => []);
-
-    for (let i = 0; i < images.length; i++) {
-      info(`正在上传图片 ${i + 1}/${images.length}…`);
-      try {
-        // 每次重新取控件：上传完一张后知乎会重建 input
-        await page.locator(imgInputSel).first().setInputFiles(images[i], { timeout: 60000 });
-        // 等这一张上传完成：编辑器里出现新的 zhimg 图（不在 before 列表里）
-        let newUrl = '';
-        const deadline = Date.now() + 60000;
-        while (Date.now() < deadline) {
-          newUrl = await editor.evaluate(known => {
-            const imgs = [...document.querySelectorAll('.public-DraftEditor-content img, div[contenteditable="true"] img')];
-            const zh = imgs.filter(x => /zhimg\.com/.test(x.getAttribute('src') || ''));
-            for (let k = zh.length - 1; k >= 0; k--) {
-              const s = zh[k].getAttribute('src') || '';
-              if (s && !known.includes(s)) return s;
-            }
-            return '';
-          }, before).catch(() => '');
-          if (newUrl) break;
-          await page.waitForTimeout(1500);
-        }
-        if (newUrl) {
-          before.push(newUrl);
-          uploaded.push({ placeholder: IMG_PLACEHOLDER(uploaded.length), url: newUrl });
-        } else {
-          uploadFails++;
-          info(`⚠️ 第 ${i + 1} 张图上传超时（图片可能过大或格式不受支持）`);
-        }
-      } catch (e) {
-        uploadFails++;
-        info(`⚠️ 第 ${i + 1} 张图上传失败：${String(e.message || e).slice(0, 100)}`);
-      }
-    }
-
-    if (uploaded.length === images.length) {
-      info(`✅ 全部 ${uploaded.length} 张图已上传到知乎图床`);
-    } else if (uploaded.length > 0) {
-      info(`⚠️ 只有 ${uploaded.length}/${images.length} 张图确认上传成功${uploadFails ? `，${uploadFails} 张失败` : ''}`);
-    } else {
-      info(`⚠️ 图片上传未成功，正文和代码块都在，图片可在浏览器里手动补传`);
-    }
-
-    // ── ⑤ 清空编辑器，用真实 URL 整篇重贴（图片位置随 HTML 顺序，正确）──
-    if (uploaded.length > 0) {
-      step(4, totalSteps, '回填图片重贴');
-      // 在干净 HTML 里把 data URI 图片依次替换为真实 CDN URL
-      let rebuilt = cleanHtml;
-      let idx = 0;
-      rebuilt = rebuilt
-        .replace(/<figure[^>]*>[\s\S]*?<\/figure>/g, (m) => /data:image/.test(m) ? `<p data-m2a-replace="${idx++}"> </p>` : m)
-        .replace(/<img[^>]*src="data:image[^"]*"[^>]*>/g, () => `<p data-m2a-replace="${idx++}"> </p>`);
-      // 只替换成功上传的；失败的保留占位文本，让用户知道这里有图
-      rebuilt = rebuilt.replace(/<p data-m2a-replace="(\d+)"> <\/p>/g, (m, n) => {
-        const hit = uploaded[n];
-        return hit ? `<img src="${hit.url}" data-m2a-img="1">` : IMG_PLACEHOLDER(Number(n));
-      });
-
-      // 清空编辑器
-      await editor.evaluate(el => {
-        el.focus();
-        const sel = window.getSelection();
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        sel.removeAllRanges(); sel.addRange(range);
-        document.execCommand('delete');
-      }).catch(() => {});
-      await page.waitForTimeout(500);
-
-      // 重贴
-      const rebuiltPlain = rebuilt.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-      await editor.evaluate((el, { h, p }) => {
-        el.focus();
-        const dt = new DataTransfer();
-        dt.setData('text/html', h);
-        dt.setData('text/plain', p);
-        el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-      }, { h: rebuilt, p: rebuiltPlain }).catch(() => {});
-      await page.waitForTimeout(3000);
-
-      const got2 = (await editor.innerText().catch(() => '')) || '';
-      info(`已重新粘贴（${got2.trim().length} 字，图片随正文位置插入）`);
-
-      // 清理残留失败占位（粘贴时若知乎把占位文本当图产生的红色失败框）
-      await editor.evaluate(el => {
-        el.querySelectorAll('figure.Editable-imageUploader, .Editable-imageUploader').forEach(f => f.remove());
-      }).catch(() => {});
-    }
-  }
-
+  step(1, totalSteps, '准备并上传图片');
+  const result = await prepareEditor(page, editor, html, {
+    baseDir: baseDir || process.cwd(), cache, onCache,
+    onProgress: (done, total) => step(2, totalSteps, `确认图片 ${done}/${total}`),
+  });
+  await titleBox.fill(title);
+  const readTitle = await titleBox.inputValue();
+  if (readTitle !== title) throw new Error('标题回读校验失败');
+  info(`已核对正文及 ${result.total} 处图片的位置、顺序和加载状态`);
   step(4, totalSteps, '内容就绪');
-  if (mode !== 'auto') { info('✅ 标题、正文、图片都已填好。请核对后【自己点页面上的「发布」】。'); return; }
-
+  if (mode !== 'auto') return '';
   const pub = page.getByRole('button', { name: /发布/ }).first();
   await pub.waitFor({ state: 'visible', timeout: 20000 }).catch(() => { throw new Error('未找到「发布」按钮'); });
   await pub.click();
-  await page.waitForTimeout(5000);
-  info('已点击发布，请在浏览器确认结果');
+  await page.waitForURL(address => address.hostname === 'zhuanlan.zhihu.com' &&
+    /^\/p\/\d+\/?$/.test(address.pathname), { timeout: 30000 })
+    .catch(() => {
+      throw new Error('已点击发布，但结果尚未确认；请在浏览器核对，勿直接重复发布');
+    });
+  return page.url();
 }
 
 // ─── 文案拼接 ───────────────────────────────────────────────────────────────

@@ -16,8 +16,8 @@ const { buildTestHtml } = require('../helpers/webview');
   console.log('zones:', zones.join(', '));
 
   // update with table + theme, toggle + sync
-  const { renderMarkdown } = require('/Users/hexin/Desktop/markdown2anything/lib/converter');
-  const { bodyHtml } = renderMarkdown('/tmp/wide_table_test.md');
+  const bodyHtml = '<table><tr><th>列一</th><th>列二</th></tr>' +
+    '<tr><td>用于验证表格展开的内容</td><td>第二列内容</td></tr></table>';
   await page.evaluate((bh) => window.dispatchEvent(new MessageEvent('message', { data: { type: 'update', bodyHtml: bh, title: 't', theme: { id: 'wechat', css: '', wrapperBg: '#ffffff' } } })), bodyHtml);
   await page.waitForTimeout(250);
   const accent = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--m2a-accent').trim());

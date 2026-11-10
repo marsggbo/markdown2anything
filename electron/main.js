@@ -574,10 +574,22 @@ ipcMain.on('zhihuPublish', async (_event, msg) => {
     sendToRenderer('zhihuPublishStart');
     const htmlContent = zhihu.buildPublishHtml(lastBodyHtml);
     if (articleId) {
-      const result = await zhihu.updateAndPublishArticle({ articleId, title, htmlContent, cookieStr });
+      const result = await zhihu.updateAndPublishArticle({
+        articleId, title, htmlContent, cookieStr,
+        baseDir: currentFilePath ? path.dirname(currentFilePath) : process.cwd(),
+        onProgress: (done, total) => sendToRenderer('zhihuPublishProgress', {
+          message: `已确认图片 ${done}/${total}...`,
+        }),
+      });
       sendToRenderer('zhihuPublishResult', { success: true, url: result.url || 'https://zhuanlan.zhihu.com/p/' + articleId });
     } else {
-      const result = await zhihu.createAndPublishArticle({ title, htmlContent, cookieStr });
+      const result = await zhihu.createAndPublishArticle({
+        title, htmlContent, cookieStr,
+        baseDir: currentFilePath ? path.dirname(currentFilePath) : process.cwd(),
+        onProgress: (done, total) => sendToRenderer('zhihuPublishProgress', {
+          message: `已确认图片 ${done}/${total}...`,
+        }),
+      });
       sendToRenderer('zhihuPublishResult', { success: true, url: result.url || '' });
     }
   } catch (err) {
@@ -593,7 +605,13 @@ ipcMain.on('zhihuSaveDraft', async (_event, msg) => {
     const articleId = (msg && msg.articleId) || null;
     if (!lastBodyHtml) { sendToRenderer('zhihuSaveDraftResult', { success: false, error: '请先在左侧编辑器输入内容' }); return; }
     const htmlContent = zhihu.buildPublishHtml(lastBodyHtml);
-    const result = await zhihu.saveAsDraft({ articleId, title, htmlContent, cookieStr });
+    const result = await zhihu.saveAsDraft({
+      articleId, title, htmlContent, cookieStr,
+      baseDir: currentFilePath ? path.dirname(currentFilePath) : process.cwd(),
+      onProgress: (done, total) => sendToRenderer('zhihuPublishProgress', {
+        message: `已确认图片 ${done}/${total}...`,
+      }),
+    });
     sendToRenderer('zhihuSaveDraftResult', { success: true, editUrl: (result && result.editUrl) || '' });
   } catch (err) {
     sendToRenderer('zhihuSaveDraftResult', { success: false, error: err.message });
@@ -873,57 +891,9 @@ function coverHistoryPayload(cfg, mdPath, coverType) {
   };
 }
 
-/**
- * 查找可用的 Chromium 可执行文件（进程内渲染封面用，与 extension.js 一致）
- */
+const { findChromium, launchOptions, missingBrowserMessage } = require('../lib/browser');
 function findCoverChromium() {
-  const home = os.homedir();
-  const cacheDirs = [
-    path.join(home, '.cache', 'ms-playwright'),
-    process.platform === 'darwin' ? path.join(home, 'Library', 'Caches', 'ms-playwright') : null,
-    process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || '', 'ms-playwright') : null,
-  ].filter(Boolean);
-  for (const cacheDir of cacheDirs) {
-    if (!fs.existsSync(cacheDir)) continue;
-    const entries = fs.readdirSync(cacheDir).filter(e => e.startsWith('chromium'));
-    for (const entry of entries) {
-      const candidates = {
-        darwin: path.join(cacheDir, entry, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
-        linux: path.join(cacheDir, entry, 'chrome-linux', 'chrome'),
-        win32: path.join(cacheDir, entry, 'chrome-win', 'chrome.exe'),
-      };
-      const p = candidates[process.platform];
-      if (p && fs.existsSync(p)) return p;
-      if (process.platform === 'darwin') {
-        const shell = path.join(cacheDir, entry, 'chrome-headless-shell-mac-arm64', 'chrome-headless-shell');
-        if (fs.existsSync(shell)) return shell;
-        const shellX64 = path.join(cacheDir, entry, 'chrome-headless-shell-mac-x64', 'chrome-headless-shell');
-        if (fs.existsSync(shellX64)) return shellX64;
-      }
-    }
-  }
-  const system = {
-    darwin: [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-    ],
-    linux: [
-      '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
-      '/usr/bin/chromium-browser', '/usr/bin/chromium',
-      '/snap/bin/chromium',
-    ],
-    win32: [
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    ],
-  };
-  for (const p of (system[process.platform] || [])) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
+  return findChromium() || null;
 }
 
 /** 从文件内容提取标题（无 readArticleMeta 时的轻量替代） */
@@ -1169,13 +1139,13 @@ ipcMain.on('coverGenerate', (_event, msg) => {
           await installChromium();
           if (finished) return;
           executablePath = findCoverChromium();
-          if (!executablePath) { finish(false, '未找到可用浏览器，请安装 Chrome 或重试「安装 Chromium」后再生成'); return; }
+          if (!executablePath) { finish(false, missingBrowserMessage()); return; }
           armWatchdog(180000);
         }
         if (finished) return;
 
         const { chromium } = require('playwright-core');
-        const browser = await chromium.launch({ executablePath, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+        const browser = await chromium.launch(launchOptions({ executablePath }));
         browserRef = browser;
         let buf = null;
         try {

@@ -1,8 +1,8 @@
 {
   "name": "markdown2anything",
-  "displayName": "Markdown2Anything — 一篇 Markdown 一键发到微信/知乎/小红书/Twitter",
-  "description": "写完一篇 Markdown，一键发布到微信公众号、知乎、小红书、Twitter(X)：自动截长图、AI 生成平台文案与串推、自动传图填字。支持 LaTeX 公式、10 套主题、实时预览。",
-  "version": "4.0.1",
+  "displayName": "Markdown2Anything — 微信/知乎/博客园多平台同步",
+  "description": "Markdown 多平台同步：公众号草稿、知乎官方发布、博客园草稿与发布，图片自动上传并保留原位，预览确认后提交。保留小红书/Twitter、LaTeX 公式、主题与实时预览。",
+  "version": "4.4.3",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",
@@ -11,7 +11,7 @@
     "theme": "dark"
   },
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.100.0"
   },
   "categories": [
     "Other",
@@ -47,10 +47,35 @@
   "activationEvents": [
     "onLanguage:markdown",
     "onCommand:markdown2anything.preview",
-    "onCommand:markdown2anything.convert"
+    "onCommand:markdown2anything.convert",
+    "onCommand:markdown2anything.syncPublish",
+    "onCommand:markdown2anything.syncWechat",
+    "onCommand:markdown2anything.syncZhihu",
+    "onCommand:markdown2anything.syncCnblogs"
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "markdown2anything.syncWechat",
+        "title": "同步到公众号（官方草稿）",
+        "category": "markdown2anything"
+      },
+      {
+        "command": "markdown2anything.syncZhihu",
+        "title": "同步到知乎（官方接口）",
+        "category": "markdown2anything"
+      },
+      {
+        "command": "markdown2anything.syncCnblogs",
+        "title": "同步到博客园",
+        "category": "markdown2anything"
+      },
+      {
+        "command": "markdown2anything.syncPublish",
+        "title": "多平台同步（公众号 / 知乎 / 博客园）",
+        "category": "markdown2anything",
+        "icon": "$(cloud-upload)"
+      },
       {
         "command": "markdown2anything.preview",
         "title": "预览微信公众号效果",
@@ -70,12 +95,22 @@
     "menus": {
       "editor/title": [
         {
+          "command": "markdown2anything.syncPublish",
+          "when": "resourceLangId == markdown",
+          "group": "navigation"
+        },
+        {
           "command": "markdown2anything.preview",
           "when": "resourceLangId == markdown",
           "group": "navigation"
         }
       ],
       "explorer/context": [
+        {
+          "command": "markdown2anything.syncPublish",
+          "when": "resourceExtname == .md",
+          "group": "1_modification"
+        },
         {
           "command": "markdown2anything.preview",
           "when": "resourceExtname == .md",
@@ -88,6 +123,11 @@
         }
       ],
       "editor/context": [
+        {
+          "command": "markdown2anything.syncPublish",
+          "when": "resourceLangId == markdown",
+          "group": "1_modification"
+        },
         {
           "command": "markdown2anything.preview",
           "when": "resourceLangId == markdown",
@@ -106,6 +146,11 @@
     "configuration": {
       "title": "Markdown2Anything",
       "properties": {
+        "markdown2anything.browserPath": {
+          "type": "string",
+          "default": "",
+          "description": "Chrome / Chromium 可执行文件路径。云端或非标准安装目录时可填写，例如 Playwright 的 chrome-linux64/chrome。留空则自动查找。"
+        },
         "markdown2anything.appid": {
           "type": "string",
           "default": "",

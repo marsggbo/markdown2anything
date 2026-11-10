@@ -17,7 +17,10 @@ const path = require('path');
 const CLI  = path.resolve(__dirname, '..');
 const ROOT = path.resolve(CLI, '..');
 
-const LIB_FILES = ['converter.js', 'themes.js', 'zhihu.js', 'llm.js', 'extract.js', 'social.js'];
+const LIB_FILES = [
+  'converter.js', 'themes.js', 'zhihu.js', 'llm.js', 'extract.js', 'social.js',
+  'publish-images.js', 'zhihu-browser.js',
+];
 const SCRIPT_FILES = ['xhs_screenshot.js', 'social_worker.js'];
 
 function copy(from, to) {

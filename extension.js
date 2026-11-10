@@ -18,6 +18,7 @@ const extract = require('./lib/extract');
 const matter = require('gray-matter');
 const pandocManager = require('./lib/pandoc-manager');
 const slidevManager = require('./lib/slidev-manager');
+const { createPublishingHost } = require('./lib/publishing/vscode-host');
 
 // 在扩展宿主里 process.execPath 是 VS Code 的 Electron 二进制，用它跑 Node 脚本
 // 必须带 ELECTRON_RUN_AS_NODE=1，否则二进制会把脚本参数当命令行选项、不执行脚本。
@@ -42,6 +43,7 @@ const debounceTimers = new Map();
 
 /** 当前选中的主题 ID（全局，所有预览共享） */
 let currentThemeId = DEFAULT_THEME_ID;
+let publishingHost;
 
 // ─────────────────────────────────────────────
 //  激活 / 停用
@@ -55,10 +57,17 @@ function activate(context) {
   // 一次性迁移：3.5.3 之前 cookie 明文存 globalState，升级后改为系统钥匙串（secrets）
   // 加密存储。启动时把旧值搬进 secrets 并清掉明文，避免用户重新登录。
   migrateLegacyCookies();
+  publishingHost = createPublishingHost({
+    vscode, context, resolveSource: resolveMdFilePath, getThemeId: () => currentThemeId,
+  });
 
   context.subscriptions.push(
     vscode.commands.registerCommand('markdown2anything.preview', handlePreview),
     vscode.commands.registerCommand('markdown2anything.convert', handleConvert),
+    vscode.commands.registerCommand('markdown2anything.syncPublish', uri => publishingHost.open(uri)),
+    vscode.commands.registerCommand('markdown2anything.syncWechat', uri => publishingHost.open(uri, { platform: 'wechat' })),
+    vscode.commands.registerCommand('markdown2anything.syncZhihu', uri => publishingHost.open(uri, { platform: 'zhihu' })),
+    vscode.commands.registerCommand('markdown2anything.syncCnblogs', uri => publishingHost.open(uri, { platform: 'cnblogs' })),
 
     // 文档变更时更新预览（500ms 防抖）
     vscode.workspace.onDidChangeTextDocument((e) => {
@@ -285,63 +294,26 @@ function updatePreview(panel, mdPath) {
 //  处理 webview → extension 消息
 // ─────────────────────────────────────────────
 
-/**
- * 查找可用的 Chromium 可执行文件（进程内渲染封面/长图用，与 scripts/cover.js 保持一致）
- */
+const { findChromium, launchOptions, missingBrowserMessage, browserErrorMessage } = require('./lib/browser');
+const { missingLibraries, installUserLibraries } = require('./lib/browser-setup');
 function findCoverChromium() {
-  const home = os.homedir();
+  return findChromium() || null;
+}
 
-  // 1. Playwright 管理的 Chromium（python playwright / node playwright 共用缓存）
-  //    注意：macOS 的默认缓存在 ~/Library/Caches/ms-playwright，不是 ~/.cache
-  const cacheDirs = [
-    path.join(home, '.cache', 'ms-playwright'),
-    process.platform === 'darwin' ? path.join(home, 'Library', 'Caches', 'ms-playwright') : null,
-    process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || '', 'ms-playwright') : null,
-  ].filter(Boolean);
-  for (const cacheDir of cacheDirs) {
-    if (!fs.existsSync(cacheDir)) continue;
-    const entries = fs.readdirSync(cacheDir).filter(e => e.startsWith('chromium'));
-    for (const entry of entries) {
-      const candidates = {
-        darwin: path.join(cacheDir, entry, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
-        linux:  path.join(cacheDir, entry, 'chrome-linux', 'chrome'),
-        win32:  path.join(cacheDir, entry, 'chrome-win', 'chrome.exe'),
-      };
-      const p = candidates[process.platform];
-      if (p && fs.existsSync(p)) return p;
-      // 新版 playwright 用 headless shell 也可
-      if (process.platform === 'darwin') {
-        const shell = path.join(cacheDir, entry, 'chrome-headless-shell-mac-arm64', 'chrome-headless-shell');
-        if (fs.existsSync(shell)) return shell;
-        const shellX64 = path.join(cacheDir, entry, 'chrome-headless-shell-mac-x64', 'chrome-headless-shell');
-        if (fs.existsSync(shellX64)) return shellX64;
-      }
-    }
-  }
-
-  // 2. 系统已安装的浏览器
-  const system = {
-    darwin: [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-    ],
-    linux: [
-      '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
-      '/usr/bin/chromium-browser', '/usr/bin/chromium',
-      '/snap/bin/chromium',
-    ],
-    win32: [
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    ],
-  };
-  for (const p of (system[process.platform] || [])) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
+async function ensureBrowserRuntime(panel, executablePath, progressType = 'coverProgress') {
+  const missing = await missingLibraries(executablePath);
+  if (!missing.length) return;
+  const choice = await vscode.window.showInformationMessage(
+    `浏览器缺少 ${missing.slice(0, 3).join('、')} 等系统库。是否下载到你的用户目录？不需要 sudo，约几十 MB。`,
+    { modal: true }, '自动安装'
+  );
+  if (choice !== '自动安装') throw new Error('已取消安装浏览器依赖');
+  panel.webview.postMessage({ type: progressType, message: '正在下载浏览器依赖…' });
+  const result = await installUserLibraries(message => {
+    panel.webview.postMessage({ type: progressType, message });
+  });
+  const stillMissing = await missingLibraries(executablePath);
+  if (stillMissing.length) throw new Error(`仍缺少系统库：${stillMissing.join('、')}。已安装 ${result.installed} 个包，但云端仓库没有补齐全部依赖。`);
 }
 
 /**
@@ -369,6 +341,10 @@ function installChromium(panel) {
 
 async function handleWebviewMessage(msg, panel, mdPath) {
   switch (msg.type) {
+    case 'openPublishing': {
+      await publishingHost.open(vscode.Uri.file(mdPath), { platform: msg.platform || null });
+      break;
+    }
     case 'ready': {
       // webview 加载完毕，发送最新内容
       updatePreview(panel, mdPath);
@@ -648,6 +624,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
             if (up.failed > 0) log(`知乎复制：${up.failed} 张图片上传失败，已保留原图`);
           } catch (err) {
             log(`知乎复制：图片上传异常 ${err.message}`);
+            throw err;
           }
         }
         panel.webview.postMessage({ type: 'zhihuHtml', html, imgCount, imgUploaded, imgReused, loggedIn });
@@ -673,6 +650,7 @@ async function handleWebviewMessage(msg, panel, mdPath) {
 
     case 'setTheme': {
       currentThemeId = msg.themeId || DEFAULT_THEME_ID;
+      publishingHost.invalidate('主题已变化，请重新生成平台预览。');
       // 重新渲染预览
       updatePreview(panel, mdPath);
       break;
@@ -828,13 +806,14 @@ async function handleWebviewMessage(msg, panel, mdPath) {
               await installChromium(panel);
               if (finished) return;
               executablePath = findCoverChromium();
-              if (!executablePath) { finish(false, '未找到可用浏览器，请安装 Chrome 或重试「安装 Chromium」后再生成'); return; }
+              if (!executablePath) { finish(false, missingBrowserMessage()); return; }
               armWatchdog(180000);
             }
+            await ensureBrowserRuntime(panel, executablePath);
             if (finished) return;
 
             const { chromium } = require('playwright-core');
-            const browser = await chromium.launch({ executablePath, args:['--no-sandbox','--disable-dev-shm-usage'] });
+            const browser = await chromium.launch(launchOptions({ executablePath }));
             browserRef = browser;
             let buf = null;
             try {
@@ -1609,15 +1588,9 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const cfg = vscode.workspace.getConfiguration('markdown2anything');
         const templateName = cfg.get('template', 'wechat');
         const templatePath = getTemplatePath(workspacePath, templateName);
-        // 走【真实浏览器】发布：知乎没有公开 API 且会主动改内部接口搞挂第三方工具，
-        // 之前直接调 api.zhihu.com 传图已经失效；而且当时把「剪贴板版」的带样式 HTML
-        // （258KB，每个标签都挂 inline style）直接丢给接口，被知乎的过滤器洗坏 —— 表现就是
-        // 代码折叠成一行、公式丢失、图片没传上去。
-        //
-        // 现在改成：干净的语义化 HTML + 用知乎编辑器自己的通道传图。
+        // 浏览器后端从发布 HTML 采集和回填图片；官方 OpenAPI 作为独立后端接入。
         const { bodyHtml } = renderMarkdown(mdPath);
         const cleanHtml = zhihu.buildPublishHtml(bodyHtml);       // <pre lang="python"> + eeimg 公式 + 无 style
-        const localImages = listMarkdownLocalImages(mdPath);      // 按出现顺序的本地图
         const cookies = await zhihuBrowserCookies();
 
         if (!cookies.length) {
@@ -1625,14 +1598,16 @@ async function handleWebviewMessage(msg, panel, mdPath) {
           break;
         }
 
-        log(`知乎发布：正文 ${cleanHtml.length} 字节，本地图 ${localImages.length} 张`);
+        log(`知乎发布：正文 ${cleanHtml.length} 字节，图片从 HTML 统一采集`);
         killWorker('zhihu');
         const pcfg2 = vscode.workspace.getConfiguration('markdown2anything');
         const result = await social.publish('zhihu', {
           extensionPath: extContext.extensionUri.fsPath,
           cookies,
-          content: { title: title.trim(), html: cleanHtml },
-          images: localImages,
+          content: {
+            title: title.trim(), html: cleanHtml,
+            baseDir: path.dirname(mdPath), articleId: existingId || null,
+          },
           mode: pcfg2.get('publish.mode', 'prepare'),
           headless: false,
           onChild: (c) => { lastChild.zhihu = c; },
@@ -1676,20 +1651,14 @@ async function handleWebviewMessage(msg, panel, mdPath) {
         const templateName = cfg.get('template', 'wechat');
         const templatePath = getTemplatePath(workspacePath, templateName);
         const { bodyHtml } = renderMarkdown(mdPath);
-        const theme = getTheme(currentThemeId);
-        let htmlContent = buildZhihuCopyHtml(bodyHtml, templatePath, theme);
-
-        htmlContent = zhihu.normalizeCodeBlocks(htmlContent);
-        htmlContent = zhihu.normalizeImagesForZhihu(htmlContent);
-
-        panel.webview.postMessage({ type: 'zhihuPublishProgress', message: '正在上传图片...' });
-        const uploadResult = await zhihu.uploadImagesInHtml(htmlContent, cookieStr, (done, total) => {
-          panel.webview.postMessage({ type: 'zhihuPublishProgress', message: `正在上传图片 ${done}/${total}...` });
+        const htmlContent = zhihu.buildPublishHtml(bodyHtml);
+        const result = await zhihu.saveAsDraft({
+          articleId: existingId || null, title: title.trim(), htmlContent, cookieStr,
+          baseDir: path.dirname(mdPath),
+          onProgress: (done, total) => panel.webview.postMessage({
+            type: 'zhihuPublishProgress', message: `已确认图片 ${done}/${total}，全部成功后保存草稿...`,
+          }),
         });
-        htmlContent = uploadResult.html;
-
-        panel.webview.postMessage({ type: 'zhihuPublishProgress', message: '正在保存草稿...' });
-        const result = await zhihu.saveAsDraft({ articleId: existingId || null, title: title.trim(), htmlContent, cookieStr });
 
         const mapKey = 'zhihu.articleIdMap';
         const map = extContext.globalState.get(mapKey, {});
@@ -2425,24 +2394,6 @@ async function zhihuBrowserCookies() {
       httpOnly: false, secure: true, sameSite: 'Lax',
     };
   }).filter(c => c && c.name && c.value);
-}
-
-/** 按 markdown 里出现的顺序列出所有【本地】图片的绝对路径（知乎发布要拿文件去喂上传控件） */
-function listMarkdownLocalImages(mdPath) {
-  try {
-    const raw = fs.readFileSync(mdPath, 'utf8');
-    const dir = path.dirname(mdPath);
-    const out = [];
-    const re = /!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
-    let m;
-    while ((m = re.exec(raw)) !== null) {
-      const src = m[1];
-      if (/^(https?:)?\/\//i.test(src) || src.startsWith('data:')) continue;  // 远程图跳过
-      const abs = path.isAbsolute(src) ? src : path.resolve(dir, src);
-      if (fs.existsSync(abs)) out.push(abs);
-    }
-    return out;
-  } catch (_) { return []; }
 }
 
 /**

@@ -98,14 +98,14 @@ async function main() {
       if (!A.PLATFORMS.includes(p)) throw new Error(`未知平台：${pos[1]}（可选 ${A.PLATFORMS.join(' / ')}）`);
       log(`正在打开浏览器登录 ${p} …`);
       await A.login(p, { log });
-      const st = A.status().find(s => s.platform === p);
+      const st = (await A.status()).find(s => s.platform === p);
       log('✅ 登录成功');
       emit(json ? JSON.stringify(st) : `已登录 ${st.name}` + (st.daysLeft != null ? `（剩 ${st.daysLeft} 天）` : ''));
       return;
     }
 
     case 'status': {
-      const st = A.status();
+      const st = await A.status();
       if (json) { emit(JSON.stringify(st, null, 2)); return; }
       for (const s of st) {
         const tag = s.loggedIn
@@ -119,7 +119,7 @@ async function main() {
     case 'logout': {
       const p = A.normPlatform(pos[1]);
       const social = require(path.join(A.ROOT, 'lib', 'social'));
-      social.clearCookies(p, store.cookieStorage());
+      await social.clearCookies(p, store.cookieStorage());
       emit(`已清除 ${p} 的 Cookie`);
       return;
     }

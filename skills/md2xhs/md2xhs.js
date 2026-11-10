@@ -95,47 +95,7 @@ const ROOT = findRoot();
 const LIB  = path.join(ROOT, 'lib');
 
 // ─── 查找 Chromium ────────────────────────────────────────────────────────────
-function findChromium() {
-  const home = os.homedir();
-
-  // 1. Playwright 管理的 Chromium
-  const cacheDir = path.join(home, '.cache', 'ms-playwright');
-  if (fs.existsSync(cacheDir)) {
-    for (const entry of fs.readdirSync(cacheDir).filter(e => e.startsWith('chromium'))) {
-      const candidates = {
-        darwin: path.join(cacheDir, entry, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
-        linux:  path.join(cacheDir, entry, 'chrome-linux', 'chrome'),
-        win32:  path.join(cacheDir, entry, 'chrome-win', 'chrome.exe'),
-      };
-      const p = candidates[process.platform];
-      if (p && fs.existsSync(p)) return p;
-    }
-  }
-
-  // 2. 系统已安装的浏览器
-  const system = {
-    darwin: [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-    ],
-    linux: [
-      '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
-      '/usr/bin/chromium-browser', '/usr/bin/chromium',
-      '/snap/bin/chromium',
-    ],
-    win32: [
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    ],
-  };
-  for (const p of (system[process.platform] || [])) {
-    if (fs.existsSync(p)) return p;
-  }
-  return null;
-}
+const { findChromium, launchOptions } = require(path.join(LIB, 'browser'));
 
 // ─── 安装 Chromium ────────────────────────────────────────────────────────────
 function installBrowser() {
@@ -210,10 +170,7 @@ async function main() {
   const SCALE  = 2;     // deviceScaleFactor，输出 2x 高清图
   const bgRgb  = parseColor(bg);
 
-  const browser = await chromium.launch({
-    executablePath,
-    args: ['--no-sandbox', '--disable-dev-shm-usage'],
-  });
+  const browser = await chromium.launch(launchOptions({ executablePath }));
 
   let savedPaths = [];
   try {

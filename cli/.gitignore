@@ -6,3 +6,5 @@
 /lib/llm.js
 /lib/extract.js
 /lib/social.js
+/lib/publish-images.js
+/lib/zhihu-browser.js

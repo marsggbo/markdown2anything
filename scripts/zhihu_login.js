@@ -15,43 +15,9 @@ const path = require('path');
 const os   = require('os');
 
 // 优先使用系统 Chrome/Edge（比 Playwright 内置 Chromium 更难被检测）
+const { findChromium, launchOptions } = require('../lib/browser');
 function findBrowser() {
-  const system = {
-    darwin: [
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
-      '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
-      '/Applications/Chromium.app/Contents/MacOS/Chromium',
-    ],
-    linux: [
-      '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
-      '/usr/bin/microsoft-edge', '/usr/bin/chromium-browser', '/usr/bin/chromium',
-    ],
-    win32: [
-      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-    ],
-  };
-  for (const p of (system[process.platform] || [])) {
-    if (fs.existsSync(p)) return p;
-  }
-  // 回退到 Playwright 内置 Chromium
-  const home     = os.homedir();
-  const cacheDir = path.join(home, '.cache', 'ms-playwright');
-  if (fs.existsSync(cacheDir)) {
-    const entries = fs.readdirSync(cacheDir).filter(e => e.startsWith('chromium'));
-    for (const entry of entries) {
-      const candidates = {
-        darwin: path.join(cacheDir, entry, 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium'),
-        linux:  path.join(cacheDir, entry, 'chrome-linux', 'chrome'),
-        win32:  path.join(cacheDir, entry, 'chrome-win', 'chrome.exe'),
-      };
-      const p = candidates[process.platform];
-      if (p && fs.existsSync(p)) return p;
-    }
-  }
-  return null;
+  return findChromium() || null;
 }
 
 (async () => {
@@ -71,18 +37,12 @@ function findBrowser() {
 
   let browser;
   try {
-    browser = await playwright.chromium.launch({
+    browser = await playwright.chromium.launch(launchOptions({
       executablePath: execPath,
       headless: false,
-      // 关键：去掉 --enable-automation，避免被知乎识别为自动化浏览器
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-      ],
-      // 不传 ignoreDefaultArgs，但手动排除 automation 相关 flag
+      args: ['--disable-blink-features=AutomationControlled'],
       ignoreDefaultArgs: ['--enable-automation'],
-    });
+    }));
   } catch (e) {
     process.stdout.write('ERROR:启动浏览器失败：' + e.message + '\n');
     process.exit(1);

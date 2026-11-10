@@ -190,19 +190,20 @@ function login(platform, { log = console.error } = {}) {
   });
 }
 
-function status() {
+async function status() {
   const st = store.cookieStorage();
-  return PLATFORMS.map(p => {
+  return Promise.all(PLATFORMS.map(async p => {
     // 知乎在插件里存的是 cookie 字符串（扫码登录），这里统一用浏览器 cookie 数组
-    const cookies = social.getCookies(p, st);
+    const cookies = await social.getCookies(p, st);
     return Object.assign({ platform: p, name: social.META[p].name }, social.cookieStatus(p, cookies));
-  });
+  }));
 }
 
 // ─── 发布 ───────────────────────────────────────────────────
 async function publish(md, platform, { mode = 'prepare', headless = false, log = console.error } = {}) {
+  if (!PLATFORMS.includes(platform)) throw new Error(`未知发布平台：${platform}`);
   const st = store.cookieStorage();
-  const cookies = social.getCookies(platform, st);
+  const cookies = await social.getCookies(platform, st);
   if (!social.cookieStatus(platform, cookies).loggedIn) {
     throw new Error(`${social.META[platform].name} 未登录，请先运行：md2any login ${platform}`);
   }
@@ -212,8 +213,8 @@ async function publish(md, platform, { mode = 'prepare', headless = false, log =
 
   if (platform === 'zhihu') {
     const { bodyHtml } = converter.renderMarkdown(md);
-    content = { title: meta.title, html: zhihu.buildPublishHtml(bodyHtml) };
-    images  = listLocalImages(md);
+    content = { title: meta.title, html: zhihu.buildPublishHtml(bodyHtml), baseDir: path.dirname(md) };
+    images = []; // 知乎 worker 从同一份 HTML 采集图片，不再单独解析 Markdown。
   } else {
     content = currentCopy(md, platform) || localCopy(md, platform);
     images  = listImages(md);

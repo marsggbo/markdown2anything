@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="__PUBLISH_CSP__">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>多平台同步</title>
+  <style nonce="__PUBLISH_NONCE__">
+    :root {
+      color-scheme: light dark;
+      --bg: var(--vscode-editor-background, #ffffff);
+      --fg: var(--vscode-editor-foreground, #334155);
+      --muted: var(--vscode-descriptionForeground, #64748b);
+      --border: var(--vscode-widget-border, #d5dbe3);
+      --input: var(--vscode-input-background, #f8fafc);
+      --blue: var(--vscode-button-background, #007acc);
+      --link: var(--vscode-textLink-foreground, #006ab1);
+      --error: var(--vscode-errorForeground, #b42335);
+      --warning: var(--vscode-editorWarning-foreground, #895d0a);
+      --success: var(--vscode-testing-iconPassed, #237347);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: var(--vscode-editor-background, #1e1e1e);
+        --fg: var(--vscode-editor-foreground, #cbd5e1);
+        --muted: var(--vscode-descriptionForeground, #a0aaba);
+        --border: var(--vscode-widget-border, #454952);
+        --input: var(--vscode-input-background, #292b30);
+        --link: var(--vscode-textLink-foreground, #65b6ef);
+        --error: var(--vscode-errorForeground, #f48791);
+        --warning: var(--vscode-editorWarning-foreground, #dbb86b);
+        --success: var(--vscode-testing-iconPassed, #89d0a5);
+      }
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.6 "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    main { max-width: 820px; padding: 20px 28px 40px; }
+    h1 { font-size: 17px; font-weight: 600; margin: 0 0 2px; }
+    h2 { font-size: 13px; font-weight: 600; margin: 0 0 8px; }
+    p { margin: 5px 0; overflow-wrap: anywhere; }
+    button, input, textarea, select { font: inherit; }
+    button, summary, input, textarea, select { outline-offset: 2px; }
+    :focus-visible { outline: 2px solid var(--vscode-focusBorder, #007acc); }
+    button { padding: 5px 12px; border: 1px solid transparent; border-radius: 3px; background: var(--blue); color: var(--vscode-button-foreground, #fff); cursor: pointer; }
+    button:hover:not(:disabled) { background: var(--vscode-button-hoverBackground, #006bb3); }
+    button.secondary { background: transparent; color: var(--fg); border-color: var(--border); }
+    button.secondary:hover:not(:disabled) { background: var(--input); }
+    button.link { border: 0; background: transparent; color: var(--link); padding: 2px 0; text-align: left; overflow-wrap: anywhere; }
+    button:disabled { opacity: .5; cursor: default; }
+    input:not([type="checkbox"]), textarea, select { width: 100%; min-width: 0; padding: 6px 8px; background: var(--input); color: var(--vscode-input-foreground, var(--fg)); border: 1px solid var(--vscode-input-border, var(--border)); border-radius: 2px; }
+    input[type="checkbox"] { accent-color: var(--blue); width: 14px; height: 14px; margin: 3px 0 0; flex: none; }
+    input::placeholder, textarea::placeholder { color: var(--vscode-input-placeholderForeground, var(--muted)); }
+    textarea { resize: vertical; }
+    label.field { display: grid; gap: 5px; margin: 10px 0; }
+    label.check { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
+    .hint, small { color: var(--muted); font-size: 12px; }
+    .source { margin: 0 0 12px; }
+    .destinations { margin-top: 16px; }
+    .platform { border-top: 1px solid var(--border); padding: 10px 0; min-width: 0; }
+    .platform:last-child { border-bottom: 1px solid var(--border); }
+    .platform-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .platform-row label { display: flex; gap: 9px; align-items: flex-start; flex: 1; min-width: 160px; cursor: pointer; }
+    .destination { display: grid; gap: 1px; }
+    .destination strong { font-weight: 600; }
+    .account-status { color: var(--muted); font-size: 12px; white-space: nowrap; }
+    .platform-row button { font-size: 12px; }
+    .platform-body { margin: 8px 0 0 23px; }
+    .platform-body > :first-child { margin-top: 0; }
+    .cover-row, .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .cover-row { flex-wrap: nowrap; }
+    .cover-row button { flex: none; }
+    details { margin-top: 10px; min-width: 0; }
+    summary { cursor: pointer; color: var(--muted); width: fit-content; max-width: 100%; }
+    details > .detail-body { padding: 2px 0 5px 15px; }
+    .account .field { max-width: 560px; }
+    .account .actions { margin-top: 12px; }
+    .help { margin: 12px 0 4px; }
+    .help p { max-width: 70ch; }
+    .help a { color: var(--link); overflow-wrap: anywhere; }
+    .test-result { margin-left: 23px; }
+    .test-result:empty { display: none; }
+    .test-result details { margin-top: 3px; }
+    ul, ol { margin: 6px 0; padding-left: 20px; overflow-wrap: anywhere; }
+    [data-status="failed"], .error { color: var(--error); }
+    [data-status="warning"] { color: var(--warning); }
+    [data-status="passed"] { color: var(--success); }
+    .submit { margin-top: 18px; }
+    #sync { min-width: 100px; }
+    #feedback { margin-top: 8px; }
+    #feedback:empty, #activity:empty, #tests-status:empty { display: none; }
+    .extras { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 20px; }
+    .result { padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .result-heading { display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+    #preview-frame { display: block; width: 100%; height: 380px; border: 1px solid var(--border); margin-top: 10px; background: var(--bg); }
+    #preview-tabs { margin-top: 10px; }
+    #preview-tabs button[aria-pressed="true"] { border-color: var(--blue); }
+    @media (max-width: 480px) {
+      main { padding: 18px 16px 30px; }
+      .platform-row { gap: 8px; }
+      .platform-row label { min-width: 130px; }
+      .platform-row button { padding: 4px 8px; }
+      .platform-body { margin-left: 0; }
+      .account-status { white-space: normal; }
+      .cover-row { flex-wrap: wrap; }
+      .cover-row input { flex-basis: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main aria-busy="false">
+    <h1 id="workspace-title">多平台同步</h1>
+    <p id="source-path" class="source hint"></p>
+    <form id="config-form">
+      <label class="field" for="title">文章标题<input id="title" data-config autocomplete="off" placeholder="输入文章标题"></label>
+      <section class="destinations" aria-labelledby="destinations-heading">
+        <h2 id="destinations-heading">同步到</h2>
+        <div id="platforms"></div>
+      </section>
+      <div class="submit">
+        <div class="actions">
+          <button id="sync" type="button" disabled>同步</button>
+          <button id="retry" type="button" class="secondary" hidden>重试失败平台</button>
+          <button id="test-selected" type="button" class="link" aria-describedby="connection-test-hint">测试连接</button>
+        </div>
+        <p id="sync-hint" class="hint">自动上传所需图片，同步前会弹出最终确认。</p>
+        <p id="connection-test-hint" class="hint">测试连接不发布文章；知乎测试会提示上传一张测试图。</p>
+        <p id="activity" class="hint" role="status" aria-live="polite"></p>
+        <p id="feedback" role="status" aria-live="polite">正在读取文档与已保存账号…</p>
+        <p id="tests-status" class="hint" role="status" aria-live="polite"></p>
+      </div>
+      <details class="extras" id="common-options">
+        <summary>更多文章选项</summary>
+        <div class="detail-body">
+          <label class="field" id="summary-field" for="summary">公众号摘要（可选）<textarea id="summary" data-config rows="2"></textarea></label>
+          <div class="actions">
+            <button id="refresh-metadata" type="button" class="secondary">从文档更新</button>
+            <button id="save-defaults" type="button" class="secondary">保存默认选项</button>
+          </div>
+        </div>
+      </details>
+    </form>
+    <details class="extras" id="results-group">
+      <summary>同步结果与历史</summary>
+      <div class="detail-body">
+        <div id="results"></div>
+        <label class="field" for="job-history">历史任务<select id="job-history"><option value="">选择历史任务</option></select></label>
+        <details id="preview-group" hidden>
+          <summary>查看正文预览（可选）</summary>
+          <div id="preview-tabs" class="actions" aria-label="预览平台"></div>
+          <div id="preview-meta" class="hint"></div>
+          <iframe id="preview-frame" title="正文预览（隔离内容）" sandbox="" referrerpolicy="no-referrer" hidden></iframe>
+        </details>
+        <details><summary>处理日志</summary><ol id="log"></ol></details>
+      </div>
+    </details>
+  </main>
+  <script nonce="__PUBLISH_NONCE__">
+    (() => {
+      'use strict';
+      const api = window.acquireVsCodeApi();
+      const $ = id => document.getElementById(id);
+      const platforms = ['wechat', 'zhihu', 'cnblogs'];
+      const names = { wechat: '微信公众号', zhihu: '知乎', cnblogs: '博客园' };
+      const states = { pending: '等待处理', preparing: '正在准备内容', ready: '内容已就绪', submitting: '正在同步', failed: '失败', draft: '已保存草稿', published: '已发布', unknown: '结果待核实' };
+      const accountFields = {
+        wechat: [['appId', 'AppID'], ['appSecret', 'AppSecret']],
+        zhihu: [['appKey', 'AppKey（公开用户标识）'], ['appSecret', 'AppSecret']],
+        cnblogs: [['blogName', '博客名（blogName）'], ['username', '用户名（username）'], ['token', '访问令牌（token）']]
+      };
+      const behaviors = { wechat: '保存到草稿箱，不直接发布', zhihu: '直接公开发布，不支持草稿', cnblogs: '保存为草稿' };
+      const help = {
+        wechat: '<p>在<a href="https://mp.weixin.qq.com/">微信公众平台</a>的「开发 / 基本配置」获取 AppID 和 AppSecret，并将本机出口 IP 加入 IP 白名单。</p><p>接口权限与接入要求见<a href="https://developers.weixin.qq.com/doc/offiaccount/Basic_Information/Access_Overview.html">官方接入概述</a>。</p>',
+        zhihu: '<p>前往<a href="https://www.zhihu.com/playground/zhihu-publisher">知乎官方发布工具</a>申请发布权限与 Secret。AppKey 使用公开个人主页 /people/ 后的用户标识（slug）。</p><p>知乎没有只读鉴权接口。「测试连接」经确认后会上传一张自动生成的 320 × 180 测试图，验证签名鉴权与图片上传，不读取当前文章，也不创建草稿或发布文章。文章发布权限尚需实际提交验证。</p>',
+        cnblogs: '<p>打开<a href="https://i.cnblogs.com/settings">博客园设置</a>，启用 MetaWeblog 并创建访问令牌。填写博客地址中的博客名（blogName）、用户名（username），以访问令牌作为密码（token）。</p>'
+      };
+      let initialized = false, hostBusy = false, awaiting = '', scope = null;
+      let multiTargets = ['wechat', 'cnblogs'];
+      let revision = 0, jobRevision = -1, job = null, expectedJob = false, loadRequested = '';
+      let uncertain = false, activePreview = '', testingTargets = [], operationFailed = false;
+      const jobs = new Map(), configured = {}, accountErrors = {}, diagnostics = new Map();
+      const post = message => api.postMessage(message);
+      const value = id => $(id).value.trim();
+      const checked = id => $(id).checked;
+      const list = input => input.split(/[,，\n]+/).map(item => item.trim()).filter(Boolean);
+      const text = (tag, content, className) => {
+        const node = document.createElement(tag);
+        node.textContent = String(content ?? '');
+        if (className) node.className = className;
+        return node;
+      };
+      const locked = () => !initialized || hostBusy || !!awaiting;
+      const targets = () => scope ? [scope] : platforms.filter(p => checked('target-' + p));
+      const entries = () => job && job.targets ? platforms.filter(p => job.targets[p]).map(p => [p, job.targets[p]]) : [];
+      const hasState = state => entries().some(([, item]) => item.state === state);
+      const inFlight = () => entries().some(([, item]) => ['pending', 'preparing', 'submitting'].includes(item.state));
+      const protectedResult = () => entries().some(([, item]) => ['draft', 'published', 'unknown', 'submitting'].includes(item.state));
+      const fresh = () => job && jobRevision === revision && job.reviewable !== false && (!scope || entries().every(([p]) => p === scope));
+      const canResume = () => fresh() && hasState('ready') && !inFlight() && !uncertain;
+      function config() {
+        return {
+          title: value('title'), summary: value('summary'), coverPath: value('cover-path'), targets: targets(),
+          options: {
+            wechat: { title: '', author: value('wechat-author'), digest: value('summary'), comments: checked('wechat-comments'), fansOnly: checked('wechat-comments') && checked('wechat-fansOnly'), sourceUrl: value('wechat-sourceUrl') },
+            zhihu: { title: '', topics: list(value('zhihu-topics')), commentPermission: value('zhihu-commentPermission'), creationStatement: value('zhihu-creationStatement'), tableOfContents: checked('zhihu-tableOfContents') },
+            cnblogs: { title: '', categories: list(value('cnblogs-categories')), tags: list(value('cnblogs-tags')), comments: checked('cnblogs-comments'), mode: value('cnblogs-mode'), postId: value('cnblogs-postId'), coverAsFirstImage: checked('cnblogs-coverAsFirstImage') }
+          }
+        };
+      }
+      function feedback(message, error = false) {
+        $('feedback').textContent = message;
+        $('feedback').classList.toggle('error', error);
+        $('feedback').setAttribute('role', error ? 'alert' : 'status');
+      }
+      function begin(type) {
+        if (locked()) return false;
+        awaiting = type;
+        operationFailed = false;
+        updateControls();
+        return true;
+      }
+      function release(type) {
+        if (awaiting !== type) return;
+        awaiting = '';
+        $('activity').textContent = '';
+      }
+      function invalidate() {
+        revision++;
+        updateControls();
+      }
+      function updateControls() {
+        const disabled = locked();
+        $('workspace-title').textContent = scope ? names[scope] + '同步' : '多平台同步';
+        document.querySelectorAll('input, textarea, select, button').forEach(node => { node.disabled = disabled; });
+        platforms.forEach(p => {
+          $('platform-' + p).hidden = !!scope && scope !== p;
+          $('target-' + p).disabled = disabled || !!scope;
+          $('body-' + p).hidden = !targets().includes(p);
+          $('remove-' + p).disabled = disabled || (!configured[p] && !accountErrors[p]);
+        });
+        $('wechat-fansOnly').disabled = disabled || !checked('wechat-comments');
+        const coverNeeded = targets().includes('wechat') || (targets().includes('cnblogs') && checked('cnblogs-coverAsFirstImage'));
+        // One local cover is shared by WeChat and the optional CNBlogs first image.
+        $('cover-field').hidden = !coverNeeded;
+        $('cover-label').textContent = targets().includes('wechat') ? '公众号封面（必填）' : '博客园正文首图';
+        $('cover-slot-' + (targets().includes('wechat') ? 'wechat' : 'cnblogs')).append($('cover-field'));
+        $('summary-field').hidden = !targets().includes('wechat');
+        $('behavior-cnblogs').textContent = value('cnblogs-mode') === 'publish' ? '直接公开发布' : '保存为草稿';
+        const missingAccounts = targets().filter(p => !configured[p] || accountErrors[p]);
+        $('sync').disabled = disabled || !targets().length || missingAccounts.length > 0 || uncertain ||
+          (!!job && (fresh() ? !canResume() : protectedResult() || inFlight()));
+        $('sync-hint').textContent = missingAccounts.length ?
+          '请先保存' + missingAccounts.map(p => names[p]).join('、') + '账号，再同步。' :
+          '自动上传所需图片，同步前会弹出最终确认。';
+        $('retry').hidden = !hasState('failed');
+        $('retry').disabled = disabled || !fresh() || !hasState('failed') || inFlight() || uncertain;
+        $('test-selected').disabled = disabled || !targets().length;
+        $('job-history').disabled = disabled || !jobs.size;
+        document.querySelector('main').setAttribute('aria-busy', String(disabled && initialized));
+        $('sync').textContent = awaiting === 'sync' || awaiting === 'execute' ? '正在同步…' : '同步';
+      }
+      function buildPlatforms() {
+        platforms.forEach(p => {
+          const section = document.createElement('section');
+          section.id = 'platform-' + p;
+          section.className = 'platform';
+          // Only constant application markup is assigned as HTML. Host content uses textContent.
+          section.innerHTML = '<div class="platform-row"><label><input id="target-' + p + '" data-config type="checkbox"><span class="destination"><strong>' + names[p] +
+            '</strong><small id="behavior-' + p + '">' + behaviors[p] + '</small></span></label><span id="status-' + p +
+            '" class="account-status">未配置</span><button id="test-' + p + '" type="button" class="secondary" aria-label="' + names[p] + '测试连接" aria-describedby="connection-test-hint">测试连接</button></div><div id="test-result-' + p +
+            '" class="test-result" role="status" aria-live="polite"></div><div id="body-' + p + '" class="platform-body"><div id="essential-' + p +
+            '"></div><div id="cover-slot-' + p + '"></div><details id="options-' + p + '"><summary>更多发布选项</summary><div class="detail-body" id="optional-' + p +
+            '"></div></details><details id="account-' + p + '" class="account"><summary>账号配置 · <span id="account-state-' + p +
+            '">未配置</span></summary><div class="detail-body" id="account-body-' + p + '"></div></details></div>';
+          $('platforms').append(section);
+          const account = $('account-body-' + p);
+          account.append(text('p', '已保存的凭证会自动复用。密钥留空保留，页面不会回填密钥。', 'hint'));
+          const source = text('p', '', 'hint');
+          source.id = 'account-source-' + p;
+          account.append(source);
+          accountFields[p].forEach(([key, label]) => {
+            const field = text('label', label, 'field');
+            const input = document.createElement('input');
+            input.id = 'account-' + p + '-' + key;
+            field.htmlFor = input.id;
+            input.type = ['appSecret', 'token'].includes(key) ? 'password' : 'text';
+            input.autocomplete = 'off';
+            input.spellcheck = false;
+            if (input.type === 'password') input.placeholder = '已保存时留空保留';
+            field.append(input);
+            account.append(field);
+          });
+          const actions = document.createElement('div');
+          actions.className = 'actions';
+          [['save', '保存账号'], ['remove', '清除账号']].forEach(([action, label]) => {
+            const button = text('button', label, 'secondary');
+            button.type = 'button';
+            button.id = action + '-' + p;
+            button.addEventListener('click', () => accountAction(p, action));
+            actions.append(button);
+          });
+          if (p === 'zhihu') {
+            const local = text('button', '导入本地凭证', 'secondary');
+            local.id = 'use-local-zhihu';
+            local.type = 'button';
+            local.addEventListener('click', () => { if (begin('account')) post({ type: 'useLocalZhihu' }); });
+            actions.append(local);
+          }
+          account.append(actions);
+          const result = text('p', '', 'hint');
+          result.id = 'account-result-' + p;
+          result.setAttribute('role', 'status');
+          account.append(result);
+          const guide = document.createElement('details');
+          guide.className = 'help';
+          guide.innerHTML = '<summary>如何获取配置</summary><div class="detail-body">' + help[p] + '</div>';
+          account.append(guide);
+          $('test-' + p).addEventListener('click', () => startTests([p]));
+        });
+        $('essential-wechat').innerHTML = '<div id="cover-field"><label class="field" for="cover-path"><span id="cover-label">公众号封面（必填）</span><span class="cover-row"><input id="cover-path" data-config placeholder="选择一张本地图片"><button id="choose-cover" type="button" class="secondary">选择图片</button></span></label></div>';
+        $('optional-wechat').innerHTML = '<label class="field" for="wechat-author">作者<input id="wechat-author" data-config></label><label class="field" for="wechat-sourceUrl">原文链接<input id="wechat-sourceUrl" data-config type="url" placeholder="https://"></label><label class="check"><input id="wechat-comments" data-config type="checkbox">开启留言</label><label class="check"><input id="wechat-fansOnly" data-config type="checkbox">仅粉丝可留言</label>';
+        $('essential-zhihu').innerHTML = '<p class="hint">知乎官方接口仅支持新建公开文章。最终确认后即公开发布。</p><label class="field" for="zhihu-creationStatement">创作声明（可选）<select id="zhihu-creationStatement" data-config><option value="">不设置</option><option value="spoiler">包含剧透</option><option value="medical_advice">包含医疗建议</option><option value="fictional_creation">虚构创作</option><option value="contain_finance">包含金融投资内容</option><option value="ai_creation">包含 AI 辅助创作</option></select></label>';
+        $('optional-zhihu').innerHTML = '<label class="field" for="zhihu-topics">话题链接（可选，最多 3 个）<textarea id="zhihu-topics" data-config rows="2" placeholder="https://www.zhihu.com/topic/19555547" aria-describedby="zhihu-topics-error"></textarea><span class="hint">使用完整话题链接，以逗号或换行分隔；也可留空。</span><span id="zhihu-topics-error" class="error" role="alert" hidden></span></label><label class="field" for="zhihu-commentPermission">评论权限<select id="zhihu-commentPermission" data-config><option value="all">所有人可评论</option><option value="nobody">关闭评论</option><option value="followee">我关注的人可评论</option><option value="censor">评论审核后显示</option><option value="follower">关注我的人可评论</option></select></label><label class="check"><input id="zhihu-tableOfContents" data-config type="checkbox">生成目录</label>';
+        $('essential-cnblogs').innerHTML = '<label class="field" for="cnblogs-mode">同步方式<select id="cnblogs-mode" data-config><option value="draft">保存为草稿</option><option value="publish">直接公开发布</option></select></label>';
+        $('optional-cnblogs').innerHTML = '<label class="field" for="cnblogs-categories">分类<input id="cnblogs-categories" data-config placeholder="以逗号分隔"></label><label class="field" for="cnblogs-tags">标签<input id="cnblogs-tags" data-config placeholder="以逗号分隔"></label><label class="field" for="cnblogs-postId">更新已有文章 ID（可选）<input id="cnblogs-postId" data-config placeholder="留空则新建文章"><span class="hint">填写后将更新该文章，请核对文章 ID。</span></label><label class="check"><input id="cnblogs-comments" data-config type="checkbox" checked>允许评论</label><label class="check"><input id="cnblogs-coverAsFirstImage" data-config type="checkbox">将封面作为正文首图</label>';
+      }
+      function accountAction(p, action) {
+        if (locked()) return;
+        const credentials = {};
+        if (action === 'save') {
+          accountFields[p].forEach(([key]) => {
+            const input = $('account-' + p + '-' + key);
+            credentials[key] = input.type === 'password' ? input.value : input.value.trim();
+          });
+          if (accountFields[p].some(([key]) => !credentials[key] && (!configured[p] || !['appSecret', 'token'].includes(key)))) {
+            feedback('请填写' + names[p] + '的必需账号字段；保存后即可复用。', true);
+            return;
+          }
+        }
+        if (!begin('account')) return;
+        post(action === 'save' ? { type: 'saveAccount', platform: p, credentials } : { type: 'removeAccount', platform: p });
+        document.querySelectorAll('#account-' + p + ' input[type="password"]').forEach(input => { input.value = ''; });
+      }
+      function applyAccounts(accounts) {
+        platforms.forEach(p => {
+          const account = accounts && accounts[p] || {};
+          configured[p] = account.configured === true;
+          accountErrors[p] = !!account.error;
+          $('status-' + p).textContent = account.error ? '配置有误' : configured[p] ? '已配置' : '未配置';
+          $('account-state-' + p).textContent = configured[p] ? '已保存' : '未配置';
+          $('account-' + p).open = !configured[p] || !!account.error;
+          $('account-result-' + p).textContent = String(account.error || '');
+          $('account-source-' + p).textContent = account.sourceLabel || account.source ? '凭证来源：' + String(account.sourceLabel || account.source) : '';
+          accountFields[p].forEach(([key]) => {
+            const input = $('account-' + p + '-' + key);
+            input.value = input.type === 'password' ? '' : String(account[key] || '');
+          });
+        });
+      }
+      function applyDefaults(defaults = {}, title = '', metadata = {}) {
+        const accountValues = new Map(Array.from(document.querySelectorAll('.account input'), input => [input.id, input.value]));
+        $('config-form').reset();
+        accountValues.forEach((setting, id) => { $(id).value = setting; });
+        $('title').value = String(defaults.title || title || '');
+        $('summary').value = String(defaults.summary ?? metadata.summary ?? '');
+        $('cover-path').value = String(defaults.coverPath || metadata.coverPath || '');
+        const selected = defaults.targets || ['wechat', 'cnblogs'];
+        platforms.forEach(p => {
+          $('target-' + p).checked = scope ? scope === p : selected.includes(p);
+          const options = defaults.options && defaults.options[p] || {};
+          document.querySelectorAll('#body-' + p + ' [data-config]').forEach(input => {
+            const field = input.id.slice(p.length + 1);
+            const key = field === 'tableOfContents' && Object.hasOwn(options, 'tableOfContentsEnabled') ? 'tableOfContentsEnabled' : field;
+            if (!Object.hasOwn(options, key)) return;
+            if (input.type === 'checkbox') input.checked = options[key] === true;
+            else {
+              const setting = Array.isArray(options[key]) ? options[key].join(', ') : String(options[key] ?? '');
+              if (input.tagName === 'SELECT' && !Array.from(input.options).some(option => option.value === setting)) {
+                const option = text('option', '已保存设置（' + setting + '）');
+                option.value = setting;
+                input.append(option);
+              }
+              input.value = setting;
+            }
+          });
+        });
+      }
+      function safeUrl(url) {
+        if (typeof url !== 'string' || /[\u0000-\u0020\u007f]/.test(url)) return '';
+        try {
+          const parsed = new URL(url);
+          return ['https:', 'http:'].includes(parsed.protocol) && parsed.hostname && !parsed.username && !parsed.password ? parsed.href : '';
+        } catch (_) { return ''; }
+      }
+      function validate(c) {
+        if (!c.targets.length) return '请至少选择一个平台。';
+        if (!c.title) { $('title').focus(); return '请填写文章标题。'; }
+        const titleLength = Array.from(c.title).length;
+        const titleLimit = c.targets.includes('wechat') ? 32 : c.targets.includes('zhihu') ? 100 : Infinity;
+        if (titleLength > titleLimit) {
+          $('title').focus();
+          return (c.targets.includes('wechat') ? '公众号' : '知乎') + '标题最多 ' + titleLimit + ' 字，当前 ' + titleLength + ' 字。请修改上方文章标题。';
+        }
+        if (c.targets.includes('wechat') && !c.coverPath) { $('cover-path').focus(); return '请选择公众号封面。'; }
+        if (c.targets.includes('cnblogs') && c.options.cnblogs.coverAsFirstImage && !c.coverPath) return '请选择博客园正文首图，或取消将封面作为首图。';
+        if (c.targets.includes('zhihu')) {
+          const topics = c.options.zhihu.topics;
+          const invalid = topics.length > 3 || topics.some(link => {
+            try {
+              const url = new URL(link);
+              return !safeUrl(link) || !['www.zhihu.com', 'zhihu.com'].includes(url.hostname) || !!url.port ||
+                !/^\/topic\/[A-Za-z0-9_-]+(?:\/(?:hot|newest|top-answers))?\/?$/.test(url.pathname);
+            } catch (_) { return true; }
+          });
+          $('zhihu-topics').setAttribute('aria-invalid', String(invalid));
+          $('zhihu-topics-error').hidden = !invalid;
+          if (invalid) {
+            const error = '请填写最多 3 个完整的知乎话题链接，或清空可选话题。';
+            $('zhihu-topics-error').textContent = error;
+            $('options-zhihu').open = true;
+            $('zhihu-topics').focus();
+            return error;
+          }
+        }
+        if (c.targets.includes('wechat') && c.options.wechat.sourceUrl && !safeUrl(c.options.wechat.sourceUrl)) return '公众号原文链接须为有效的 HTTP / HTTPS 地址。';
+        const missing = c.targets.filter(p => !configured[p] || accountErrors[p]);
+        if (missing.length) {
+          $('account-' + missing[0]).open = true;
+          return '请先配置账号：' + missing.map(p => names[p]).join('、') + '。';
+        }
+        return '';
+      }
+      function startTests(selected) {
+        if (scope) selected = selected.filter(p => p === scope);
+        if (!selected.length || !begin('test')) return;
+        testingTargets = selected;
+        selected.forEach(p => {
+          diagnostics.delete(p);
+          $('test-result-' + p).replaceChildren(text('p', '正在测试连接…', 'hint'));
+        });
+        feedback(selected.includes('zhihu')
+          ? '正在测试连接；知乎会提示上传一张测试图，不发布文章。'
+          : '正在检查已保存的账号与可用连接，不发布文章。');
+        post({ type: 'testConnections', targets: selected });
+      }
+      function renderDiagnostic(message, destination) {
+        const result = $(destination);
+        const heading = text('p', message.message || ({ passed: '连接检查通过', warning: '需要留意', failed: '连接检查失败' }[message.status]), 'hint');
+        heading.dataset.status = message.status;
+        result.replaceChildren(heading);
+        const details = document.createElement('details');
+        details.append(text('summary', '检查详情'));
+        const checks = document.createElement('ul');
+        (Array.isArray(message.checks) ? message.checks : []).forEach(check => {
+          if (!check || typeof check !== 'object') return;
+          const labels = { credentials: '账号配置', api: '接口连接', 'image-upload': '图片上传', publishing: '文章发布', watermark: '图片水印' };
+          const item = text('li', [labels[check.label] || check.label, check.message].filter(Boolean).join('：'));
+          item.dataset.status = String(check.status || '');
+          checks.append(item);
+        });
+        details.append(checks, text('p', [Number.isFinite(message.durationMs) ? message.durationMs + ' ms' : '', message.checkedAt].filter(Boolean).join(' · '), 'hint'));
+        if (message.platform === 'zhihu') details.append(text('p', '测试图用于验证签名鉴权与图片上传；文章发布权限尚未验证。', 'hint'));
+        result.append(details);
+      }
+      function previewDocument(html) {
+        const doc = new DOMParser().parseFromString(String(html), 'text/html');
+        doc.querySelectorAll('script, iframe, frame, object, embed, base, meta, link, form, input, button, textarea, select, animate, animateMotion, animateTransform, set, discard').forEach(node => node.remove());
+        doc.querySelectorAll('*').forEach(node => {
+          Array.from(node.attributes).forEach(attribute => {
+            const link = /^(href|xlink:href)$/i.test(attribute.name);
+            const glyph = node.namespaceURI === 'http://www.w3.org/2000/svg' && node.localName !== 'a' && /^#[\w:.-]+$/.test(attribute.value);
+            if (/^on/i.test(attribute.name) || (link && !glyph) || /^(srcdoc|action|formaction|target|nonce)$/i.test(attribute.name)) node.removeAttribute(attribute.name);
+          });
+        });
+        const csp = doc.createElement('meta');
+        csp.httpEquiv = 'Content-Security-Policy';
+        csp.content = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src https: data:; connect-src 'none'; font-src 'none'; media-src 'none'; frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'";
+        doc.head.prepend(csp);
+        const charset = doc.createElement('meta');
+        charset.charset = 'UTF-8';
+        doc.head.prepend(charset);
+        const style = doc.createElement('style');
+        style.setAttribute('nonce', '__PUBLISH_NONCE__');
+        const theme = getComputedStyle(document.body);
+        style.textContent = 'body{margin:16px;overflow-wrap:anywhere;font-family:' + theme.fontFamily + ';color:' + theme.color + ';background:' + theme.backgroundColor + ';line-height:1.7}img{max-width:100%;height:auto}pre{overflow:auto}table{max-width:100%}';
+        doc.head.append(style);
+        return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
+      }
+      function renderPreview() {
+        const available = entries().filter(([, item]) => typeof item.prepared?.html === 'string');
+        $('preview-group').hidden = !available.length;
+        if (!available.some(([p]) => p === activePreview)) activePreview = available[0]?.[0] || '';
+        $('preview-tabs').replaceChildren();
+        available.forEach(([p]) => {
+          const button = text('button', names[p], 'secondary');
+          button.type = 'button';
+          button.setAttribute('aria-pressed', String(p === activePreview));
+          button.addEventListener('click', () => { activePreview = p; renderPreview(); updateControls(); });
+          $('preview-tabs').append(button);
+        });
+        const item = job?.targets[activePreview];
+        $('preview-meta').textContent = item ? names[activePreview] + ' · ' + (states[item.state] || '状态待核实') : '';
+        $('preview-frame').hidden = !item?.prepared;
+        if (item?.prepared) $('preview-frame').srcdoc = previewDocument(item.prepared.html);
+        else $('preview-frame').removeAttribute('srcdoc');
+      }
+      function renderResults() {
+        $('results').replaceChildren();
+        entries().forEach(([p, item]) => {
+          const result = document.createElement('article');
+          result.className = 'result';
+          const heading = document.createElement('div');
+          heading.className = 'result-heading';
+          heading.append(text('strong', names[p]), text('span', states[item.state] || '状态待核实'));
+          result.append(heading);
+          if (item.message) result.append(text('p', item.message));
+          if (item.state === 'unknown') result.append(text('p', '请到平台后台核实是否已创建文章。此平台不会自动重发，也不会参与重试。', 'hint'));
+          [...(Array.isArray(item.warnings) ? item.warnings : []), ...(Array.isArray(item.prepared?.warnings) ? item.prepared.warnings : [])].forEach(warning => result.append(text('p', warning, 'hint')));
+          const url = safeUrl(item.url);
+          if (url) {
+            const button = text('button', '打开平台结果', 'link');
+            button.type = 'button';
+            button.addEventListener('click', () => { if (!locked()) post({ type: 'openUrl', url }); });
+            result.append(button);
+          }
+          $('results').append(result);
+        });
+        $('job-history').replaceChildren(text('option', '选择历史任务'));
+        $('job-history').firstChild.value = '';
+        jobs.forEach(item => {
+          const option = text('option', [item.createdAt, item.title || '未命名任务'].filter(Boolean).join(' / '));
+          option.value = String(item.id);
+          $('job-history').append(option);
+        });
+        $('job-history').value = job ? String(job.id) : '';
+        renderPreview();
+      }
+      function acceptJob(next) {
+        if (!next?.id || !next.targets || typeof next.targets !== 'object') return;
+        const loading = loadRequested === String(next.id);
+        if (loading) {
+          applyDefaults(next.config, next.title);
+          jobRevision = next.reviewable === true ? revision : -1;
+          uncertain = false;
+          loadRequested = '';
+          release('loadJob');
+        } else if (expectedJob) {
+          jobRevision = revision;
+          expectedJob = false;
+        } else if (job?.id !== next.id) jobRevision = -1;
+        job = next;
+        jobs.set(String(next.id), next);
+        if (entries().some(([, item]) => ['failed', 'unknown', 'draft', 'published'].includes(item.state))) {
+          $('results-group').open = true;
+        }
+        if (next.reviewable === false) jobRevision = -1;
+        // Receiving a ready job is intermediate during sync. Only syncComplete
+        // releases that operation, including the native confirmation interval.
+        if (!inFlight() && ['execute', 'retry'].includes(awaiting) && !hasState('ready')) {
+          release(awaiting);
+        }
+        renderResults();
+        if (!inFlight() && (!awaiting || awaiting === 'loadJob')) describeJob();
+      }
+      function describeJob() {
+        if (uncertain) feedback('同步中断，请先到平台后台核实结果；不会自动重发。', true);
+        else if (hasState('unknown')) feedback('部分结果待核实，请查看同步结果。成功与待核实平台不会重发。');
+        else if (hasState('failed')) feedback(entries().filter(([, item]) => item.state === 'failed')
+          .map(([p, item]) => names[p] + '：' + (item.message || '同步失败，请检查账号与发布选项')).join('；') +
+          '。可重试失败平台，成功与待核实平台不会重发。', true);
+        else if (canResume()) feedback('内容已就绪，点击“同步”后将再次弹出最终确认。');
+        else if (protectedResult()) feedback('同步已完成。可在同步结果中打开平台文章或草稿。');
+      }
+      buildPlatforms();
+      $('config-form').addEventListener('submit', event => event.preventDefault());
+      document.querySelectorAll('[data-config]').forEach(input => {
+        input.addEventListener(input.type === 'checkbox' || input.tagName === 'SELECT' ? 'change' : 'input', () => { if (!locked()) invalidate(); });
+      });
+      document.addEventListener('click', event => {
+        const anchor = event.target.closest('a');
+        if (!anchor) return;
+        event.preventDefault();
+        const url = safeUrl(anchor.getAttribute('href'));
+        if (url && !locked()) post({ type: 'openUrl', url });
+      });
+      $('sync').addEventListener('click', () => {
+        if (locked() || $('sync').disabled) return;
+        if (canResume()) {
+          if (!begin('execute')) return;
+          post({ type: 'execute', jobId: job.id });
+          feedback('等待最终确认，然后同步已有内容…');
+          return;
+        }
+        const c = config(), error = validate(c);
+        if (error) { feedback(error, true); return; }
+        if (!begin('sync')) return;
+        expectedJob = true;
+        jobRevision = -1;
+        uncertain = false;
+        post({ type: 'sync', config: c });
+        feedback('正在上传所需图片，随后等待最终确认并同步…');
+      });
+      $('retry').addEventListener('click', () => {
+        if ($('retry').disabled || !begin('retry')) return;
+        post({ type: 'retry', jobId: job.id });
+        feedback('仅重试失败平台；内容就绪后可点击“同步”并最终确认。');
+      });
+      $('test-selected').addEventListener('click', () => startTests(targets()));
+      $('choose-cover').addEventListener('click', () => { if (begin('chooseCover')) post({ type: 'chooseCover' }); });
+      $('refresh-metadata').addEventListener('click', () => { if (begin('refreshMetadata')) post({ type: 'refreshMetadata' }); });
+      $('save-defaults').addEventListener('click', () => { if (begin('saveDefaults')) post({ type: 'saveDefaults', config: config() }); });
+      $('job-history').addEventListener('change', () => {
+        const id = value('job-history');
+        if (!id || !begin('loadJob')) return;
+        loadRequested = id;
+        post({ type: 'loadJob', jobId: id });
+      });
+      window.addEventListener('message', event => {
+        // VS Code masks window.parent. Authenticate its hidden relay with the
+        // exact panel origin and always reject messages from the opaque preview.
+        const previewWindow = $('preview-frame').contentWindow;
+        if (location.protocol === 'vscode-webview:') {
+          if (event.origin !== location.origin || (previewWindow && event.source === previewWindow)) return;
+        } else if ((previewWindow && event.source === previewWindow) ||
+                   (event.origin && event.origin !== location.origin) ||
+                   (event.source && event.source !== window && event.source !== window.parent)) return;
+        const message = event.data;
+        if (!message || typeof message !== 'object') return;
+        switch (message.type) {
+          case 'init':
+            initialized = true; hostBusy = false; awaiting = ''; job = null;
+            revision = 0; jobRevision = -1; expectedJob = false; uncertain = false; loadRequested = '';
+            testingTargets = []; diagnostics.clear(); jobs.clear(); operationFailed = false;
+            scope = platforms.includes(message.scope) ? message.scope : null;
+            document.querySelectorAll('details').forEach(node => { node.open = false; });
+            platforms.forEach(p => $('test-result-' + p).replaceChildren());
+            $('tests-status').textContent = ''; $('activity').textContent = ''; $('log').replaceChildren();
+            $('source-path').textContent = String(message.sourcePath || '');
+            applyDefaults(message.defaults, message.metadata?.title || message.title, message.metadata);
+            multiTargets = scope ? ['wechat', 'cnblogs'] : targets().slice();
+            applyAccounts(message.accounts);
+            (Array.isArray(message.jobs) ? message.jobs : []).forEach(item => { if (item?.id) jobs.set(String(item.id), item); });
+            renderResults();
+            feedback('');
+            break;
+          case 'scopeChanged':
+            if (!scope) multiTargets = targets().slice();
+            scope = platforms.includes(message.platform) ? message.platform : null;
+            platforms.forEach(p => { $('target-' + p).checked = scope ? p === scope : multiTargets.includes(p); });
+            invalidate();
+            break;
+          case 'accounts':
+            applyAccounts(message.accounts);
+            release('account');
+            break;
+          case 'accountResult':
+            if (!platforms.includes(message.platform)) return;
+            $('account-result-' + message.platform).textContent = String(message.message || '');
+            if (!message.success) $('account-' + message.platform).open = true;
+            release('account');
+            feedback(String(message.message || (message.success ? '账号已保存。' : '账号操作失败。')), !message.success);
+            break;
+          case 'testResult':
+            if (awaiting !== 'test' || !testingTargets.includes(message.platform) || !['passed', 'warning', 'failed'].includes(message.status)) return;
+            diagnostics.set(message.platform, message);
+            renderDiagnostic(message, 'test-result-' + message.platform);
+            break;
+          case 'testsComplete':
+            if (awaiting !== 'test') return;
+            testingTargets.filter(p => !diagnostics.has(p)).forEach(p => $('test-result-' + p).replaceChildren(text('p', '未返回连接检查结果，请重试。', 'error')));
+            $('tests-status').textContent = '连接测试完成：' + testingTargets.map(p => names[p] + ' ' + ({ passed: '通过', warning: '提醒', failed: '失败' }[diagnostics.get(p)?.status] || '未返回结果')).join('，');
+            release('test');
+            {
+              const issue = testingTargets.map(p => diagnostics.get(p)).find(result => result?.status === 'failed') ||
+                testingTargets.map(p => diagnostics.get(p)).find(result => result?.status === 'warning');
+              feedback(issue ? names[issue.platform] + '：' + String(issue.message || '请查看连接检查详情。') :
+                $('tests-status').textContent, issue?.status === 'failed');
+            }
+            break;
+          case 'metadata':
+            if (awaiting !== 'refreshMetadata') return;
+            release('refreshMetadata');
+            $('title').value = String(message.metadata?.title || '');
+            $('summary').value = String(message.metadata?.summary || '');
+            invalidate();
+            feedback('已从文档更新标题与摘要。');
+            break;
+          case 'coverChosen':
+            if (awaiting !== 'chooseCover') return;
+            release('chooseCover');
+            if (typeof message.path === 'string') { $('cover-path').value = message.path; invalidate(); }
+            break;
+          case 'defaultsSaved':
+            release('saveDefaults');
+            feedback('默认选项已保存。');
+            break;
+          case 'invalidated':
+            invalidate();
+            feedback('文档或账号已变化，下次同步会重新检查内容。');
+            break;
+          case 'busy':
+            hostBusy = message.busy === true;
+            // Legacy execute/retry complete through busy:false. Sync has its own
+            // terminal event, so ready jobs and busy gaps cannot unlock it.
+            if (!hostBusy && ['execute', 'retry'].includes(awaiting)) { release(awaiting); describeJob(); }
+            break;
+          case 'job':
+            acceptJob(message.job);
+            break;
+          case 'syncComplete':
+            if (awaiting !== 'sync') return;
+            release('sync');
+            expectedJob = false;
+            if (!operationFailed) describeJob();
+            break;
+          case 'cancelled':
+            // Ignore late compatibility messages from the former standalone test.
+            if (message.operation === 'testZhihuUpload') return;
+            if (['sync', 'execute'].includes(awaiting)) {
+              uncertain = false;
+              operationFailed = true;
+              if (awaiting === 'execute') release('execute');
+              feedback('已取消同步。内容就绪后可点击“同步”，再次进行最终确认。');
+            } else if (awaiting && awaiting !== 'sync') {
+              release(awaiting);
+              feedback('已取消操作。');
+            }
+            break;
+          case 'progress':
+            $('activity').textContent = (names[message.platform] ? names[message.platform] + '：' : '') + String(message.message || '');
+            $('log').append(text('li', $('activity').textContent));
+            while ($('log').children.length > 100) $('log').firstChild.remove();
+            break;
+          case 'error':
+            operationFailed = true;
+            if (awaiting === 'test') {
+              testingTargets.filter(p => !diagnostics.has(p)).forEach(p => {
+                const result = { platform: p, status: 'failed',
+                  message: String(message.message || '连接测试未能完成，请重试。'),
+                  checks: [{ label: 'api', status: 'failed', message: String(message.message || '连接测试未能完成，请重试。') }] };
+                diagnostics.set(p, result);
+                renderDiagnostic(result, 'test-result-' + p);
+              });
+            }
+            // Ready content has not been submitted. Let an explicit user action
+            // resume that same job through native confirmation after completion.
+            // Submitting content needs verification; unknown targets stay protected.
+            if (['sync', 'execute'].includes(awaiting) && job) uncertain = hasState('submitting');
+            if (!['sync', 'test'].includes(awaiting)) release(awaiting);
+            {
+              const errorMessage = /没有待提交的平台/.test(message.message || '') && hasState('failed') ?
+                entries().filter(([, item]) => item.state === 'failed')
+                  .map(([p, item]) => names[p] + '：' + (item.message || '准备失败，请检查账号与文章')).join('；') :
+                String(message.message || '操作失败，请检查配置。');
+              feedback(errorMessage +
+              (uncertain ? ' 请到平台后台核实结果，当前任务不会自动重发。' : ''), true);
+            }
+            break;
+          default: return;
+        }
+        updateControls();
+      });
+      updateControls();
+      post({ type: 'ready' });
+    })();
+  </script>
+</body>
+</html>
