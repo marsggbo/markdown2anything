@@ -50,10 +50,12 @@ try {
   }
 } catch { /* 无 git 时跳过 */ }
 
-const tags = shOut('git tag -l').split('\n');
-if (tags.includes(tag)) {
-  console.error(`❌ tag ${tag} 已存在。请先删 tag 或用更高版本号。`);
-  process.exit(1);
+if (!process.argv.includes('--allow-existing-tag')) {
+  const tags = shOut('git tag -l').split('\n');
+  if (tags.includes(tag)) {
+    console.error(`❌ tag ${tag} 已存在。请先删 tag 或用更高版本号。`);
+    process.exit(1);
+  }
 }
 
 // ── 2. 构建两个 vsix ──
@@ -139,7 +141,7 @@ for (const f of [vsixPrimary, vsixLegacy]) {
 }
 
 // ── 3. GitHub Release ──
-if (!buildOnly) {
+if (!buildOnly && !process.argv.includes('--skip-github')) {
   console.log('\n🚀 创建 GitHub Release …');
   const repoUrl = pkg.repository && pkg.repository.url ? pkg.repository.url.replace('https://github.com/', '').replace(/\.git$/, '') : 'marsggbo/markdown2anything';
   sh(`gh release create ${tag} ${vsixPrimary} ${vsixLegacy} --title "${tag}" --notes "Markdown2Anything v${version}（同时发布 md2wechat 双版本）— 见 CHANGELOG.md"`);
