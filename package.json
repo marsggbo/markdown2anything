@@ -2,7 +2,7 @@
   "name": "markdown2anything",
   "displayName": "Markdown2Anything — 微信/知乎/博客园多平台同步",
   "description": "Markdown 多平台同步：公众号草稿、知乎官方发布、博客园草稿与发布，图片自动上传并保留原位，预览确认后提交。保留小红书/Twitter、LaTeX 公式、主题与实时预览。",
-  "version": "4.4.3",
+  "version": "5.0.0",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",

@@ -30,10 +30,10 @@
 ext install marsggbo.markdown2anything
 ```
 
-本地 4.4.2 安装包可通过扩展面板的「从 VSIX 安装…」选择，或在安装包目录运行：
+本地 5.0.0 安装包可通过扩展面板的「从 VSIX 安装…」选择，或在安装包目录运行：
 
 ```bash
-code --install-extension ./markdown2anything-4.4.2.vsix
+code --install-extension ./markdown2anything-5.0.0.vsix
 ```
 
 **2. 打开预览**
@@ -48,7 +48,7 @@ code --install-extension ./markdown2anything-4.4.2.vsix
 
 ## 发布到各平台
 
-### 4.4.1 单平台与多平台同步（VS Code）
+### 5.0.0 单平台与多平台同步（VS Code）
 
 打开并保存 Markdown 文件，在预览工具栏的「微信」「知乎」菜单中，首项「同步与配置（官方接口）」进入对应平台工作台；新增「博客园」按钮及同名菜单项。也可以点击「多平台同步」，一次选择多个目标平台。
 
