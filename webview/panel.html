@@ -255,21 +255,32 @@
     /* ── 预览区域 ── */
     .preview-scroll {
       flex: 1;
+      container-type: inline-size;
       overflow: auto;
+      scrollbar-gutter: stable;
       padding: 0;
       background: #fff;
-      /* 不用 flex 布局，zoom-canvas 用 margin:0 auto 居中，
-         这样 CSS zoom 放大后 scrollHeight 真实增长，scrollTop 补偿才有效 */
     }
-    /* zoom-canvas：直接撑开 scroll 容器，margin auto 水平居中
-       宽度跟随正文宽度滑块（--content-w 百分比，默认 70%） */
+    .zoom-stage { --preview-base-width: calc(var(--content-w, 70) * 1cqw); }
+    body.width-full .zoom-stage { --content-w: 100; }
     .zoom-canvas {
-      /* 宽度自适应容器，zoom 放大后 scrollWidth 自然增长 */
       width: 100%;
-      max-width: var(--content-w, 70%);
+      max-width: calc(var(--content-w, 70) * 1%);
       margin: 0 auto;
-      /* zoom 由 JS 动态设置，默认 1 */
       box-sizing: border-box;
+    }
+    /* 占位层按倍率撑开滚动区域，正文始终按 100% 缩放时的宽度排版。 */
+    .zoom-stage[data-mode="canvas"] {
+      width: calc(var(--preview-base-width) * var(--preview-scale, 1));
+      margin: 0 auto;
+      overflow: clip;
+    }
+    .zoom-stage[data-mode="canvas"] .zoom-canvas {
+      width: var(--preview-base-width);
+      max-width: none;
+      margin: 0;
+      transform: scale(var(--preview-scale, 1));
+      transform-origin: top left;
     }
     .article-wrapper {
       width: 100%;
@@ -277,15 +288,6 @@
       padding: 32px 28px;
       min-height: 200px;
     }
-    /* 正文宽度：由设置面板的百分比滑块控制。
-       滑块值写入 body[data-content-width="N"]，这里映射成 CSS 变量，
-       预览区宽度随预览容器比例变化，适配不同屏幕（比固定 px 更合理）。 */
-    .zoom-canvas { max-width: var(--content-w, 70%); }
-    /* 全宽（100%）：不再有上限，真正铺满预览区 */
-    body[data-content-width="100"] .zoom-canvas { max-width: 100%; }
-    /* 向后兼容旧档位（narrow/medium/wide/full 由旧下拉产生） */
-    body.width-full .zoom-canvas { max-width: 100%; }
-
     /* ── 侧面板通用 ── */
     .side-panel {
       width: 0;
@@ -632,28 +634,27 @@
       color: #666;
       background: #fafafa;
     }
-    /* 表格智能自适应：
-       - table-layout:auto + width:max-content —— 窄表收缩到内容宽度并居中显示，
-         不再被 width:100% 强行拉满整行（解决"表格被拉得很宽"）
-       - 单元格 word-break 保证长 URL/连续字符自动折行，不把整行撑成巨高（解决"某行很高"）
-       - 表头 nowrap 不换行，行高更整齐
-       宽表超宽时由 .table-wrapper 内部横向滚动 */
+    /* 表格按内容宽度显示，但始终限制在预览区内滚动。
+       单元格保留最小可读宽度，避免中文被压成逐字竖排。 */
     .article-wrapper table {
       border-collapse: collapse;
       width: max-content;
-      max-width: 100%;
-      margin: 1em auto;
+      min-width: 100%;
+      margin: 0;
       table-layout: auto;
-      font-size: 0.96em;
-      line-height: 1.6;
+      font-size: 0.94em;
+      line-height: 1.55;
     }
     .article-wrapper table td,
     .article-wrapper table th {
       border: 1px solid #999;
-      padding: 9px 14px;
-      vertical-align: middle;
-      word-break: break-word;
-      overflow-wrap: break-word;
+      padding: 8px 12px;
+      vertical-align: top;
+      min-width: 7em;
+      max-width: 24em;
+      white-space: normal;
+      word-break: normal;
+      overflow-wrap: anywhere;
       text-align: left;
     }
     .article-wrapper table th {
@@ -661,27 +662,20 @@
       font-weight: 600;
       text-align: center;
       white-space: nowrap;
+      max-width: none;
     }
     .article-wrapper table tbody tr:nth-child(even) { background: rgba(128,128,128,0.06); }
     .article-wrapper table tbody tr:hover { background: rgba(0,120,212,0.08); }
-    /* 长表格单元格：给"内容特别多的列"一个合理的最大宽度，
-       避免单列被塞满导致行过高（典型是备注/描述列） */
-    .article-wrapper table td {
-      max-width: 480px;
-    }
-    /* 宽表格滚动容器：内部横向滚动，避免宽表格把整个预览页撑宽
-       （renderMarkdown 会把每个 <table> 包进 .table-wrapper）
-       默认「横向滚动」模式；工具栏按钮可切换到「完整显示」（body.tables-expanded） */
     .article-wrapper .table-wrapper {
       overflow-x: auto;
+      max-width: 100%;
+      margin: 1em 0;
       -webkit-overflow-scrolling: touch;
-      text-align: center;
     }
-    /* 完整显示模式：宽表格自然展开，预览区出现横向滚动条以看全表（仅影响预览，不改变导出的 HTML） */
-    body.tables-expanded .article-wrapper .table-wrapper {
-      overflow-x: visible !important;
-      overflow-y: visible !important;
-      -webkit-overflow-scrolling: auto !important;
+    body.tables-expanded .article-wrapper table td,
+    body.tables-expanded .article-wrapper table th {
+      max-width: none;
+      white-space: nowrap;
     }
     .article-wrapper ul, .article-wrapper ol { padding-left: 1.5em; }
     .article-wrapper figcaption {
@@ -744,6 +738,16 @@
     .zoom-controls .btn {
       padding: 4px 9px;
       font-size: 14px;
+    }
+    #zoom-mode {
+      padding: 4px 5px;
+      border: 1px solid #555;
+      border-radius: 4px;
+      background: #303030;
+      color: #eee;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
     }
     #zoom-value {
       font-size: 12px;
@@ -949,9 +953,13 @@
         </select>
         <button class="btn btn-toc" id="btn-toc" data-tip="显示/隐藏文章目录">📑</button>
         <div class="zoom-controls">
-          <button class="btn btn-icon" id="btn-zoom-out" data-tip="缩小预览（按住 Ctrl/Cmd 滚轮）">－</button>
+          <select id="zoom-mode" aria-label="工具栏缩放模式" title="设置 ＋／－ 的缩放方式。触控板捏合总是放大整张画布和图片">
+            <option value="canvas">画布缩放</option>
+            <option value="text">文字缩放</option>
+          </select>
+          <button class="btn btn-icon" id="btn-zoom-out" data-tip="按当前模式缩小预览">－</button>
           <span id="zoom-value">100%</span>
-          <button class="btn btn-icon" id="btn-zoom-in" data-tip="放大预览（按住 Ctrl/Cmd 滚轮）">＋</button>
+          <button class="btn btn-icon" id="btn-zoom-in" data-tip="按当前模式放大预览">＋</button>
           <button class="btn btn-icon" id="btn-zoom-reset" data-tip="重置缩放">↺</button>
         </div>
         <button class="btn btn-icon" id="btn-sync-to-preview" data-tip="跳到编辑器光标对应的预览位置">→</button>
@@ -1152,9 +1160,11 @@
 
     <!-- 预览区 -->
     <div class="preview-scroll" id="preview-scroll">
-      <div class="zoom-canvas" id="zoom-canvas">
-        <div class="article-wrapper" id="preview-content">
-          <p style="color:#999;text-align:center;padding:48px 0;">✏️ 在左侧编辑器中输入内容，此处实时预览</p>
+      <div class="zoom-stage" id="zoom-stage">
+        <div class="zoom-canvas" id="zoom-canvas">
+          <div class="article-wrapper" id="preview-content">
+            <p style="color:#999;text-align:center;padding:48px 0;">✏️ 在左侧编辑器中输入内容，此处实时预览</p>
+          </div>
         </div>
       </div>
     </div>
@@ -2568,11 +2578,11 @@
       if (!nav) return;
       const items = nav.querySelectorAll('.toc-item');
       if (!items.length) return;
-      const scrollTop = document.querySelector('.preview-scroll').scrollTop;
+      const visibleTop = document.getElementById('preview-scroll').getBoundingClientRect().top;
       let activeItem = null;
       items.forEach(item => {
         const target = document.getElementById(item.dataset.id);
-        if (target && target.offsetTop - 80 <= scrollTop) activeItem = item;
+        if (target && target.getBoundingClientRect().top <= visibleTop + 80) activeItem = item;
       });
       items.forEach(i => i.classList.remove('active'));
       if (activeItem) activeItem.classList.add('active');
@@ -3534,9 +3544,7 @@
     function applyContentWidth(w, remember) {
       const pct = Math.min(100, Math.max(50, Math.round(Number(w) || 70)));
       savedWidth = pct;
-      // 写入 CSS 变量 + data 属性（data-content-width="100" 触发全宽规则）
-      document.body.style.setProperty('--content-w', pct + '%');
-      document.body.setAttribute('data-content-width', String(pct));
+      document.body.style.setProperty('--content-w', String(pct));
       if (widthSel) widthSel.value = String(pct);
       if (widthLabel) widthLabel.textContent = pct + '%';
       if (remember !== false) {
@@ -3658,8 +3666,8 @@
             break;
           }
           const scroller = document.getElementById('preview-scroll');
-          // offsetTop 已经在 CSS zoom 坐标系里，scrollTop 也是同一坐标系，直接使用
-          scroller.scrollTo({ top: Math.max(0, best.offsetTop - 60), behavior: 'smooth' });
+          const offset = best.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+          scroller.scrollTo({ top: scroller.scrollTop + offset - 60, behavior: 'smooth' });
           break;
         }
         case 'themeList': {
@@ -4282,80 +4290,86 @@
       }
     });
 
-    // ─── 局部缩放：transform scale + 拖拽平移 ───
-    // 用 transform:scale() 代替 zoom，放大后可拖拽查看任意局部，不影响滚动位置
-    // ─── 缩放系统：两种模式 ───────────────────────────────────
-    // 整体缩放（工具栏 ＋/－/↺）：改 font-size，内容正常重排，位置稳定
-    // ─── 缩放系统 ───────────────────────────────────────────────
-    // 所有缩放方式（工具栏+/-、触控板双指、Ctrl+滚轮）统一做局部缩放：
-    // 以当前视口中心为锚点，缩放后该锚点对应的内容保持在视口同一位置。
-    // 实现：CSS zoom 影响布局（scrollHeight 等比变化），
-    // 缩放前后保持"锚点内容位置 / scrollHeight"的比值不变，反算出新的 scrollTop。
+    // ─── 预览缩放 ───
+    const scrollEl = document.getElementById('preview-scroll');
+    const zoomStage = document.getElementById('zoom-stage');
+    const zoomCanvas = document.getElementById('zoom-canvas');
+    const zoomModeSelect = document.getElementById('zoom-mode');
+    const zoomValue = document.getElementById('zoom-value');
+    let currentZoom = 100;
+    let buttonZoomMode = 'canvas';
+    try {
+      if (vscode.getState?.()?.zoomMode === 'text') buttonZoomMode = 'text';
+    } catch (_) {}
+    zoomModeSelect.value = buttonZoomMode;
+    let zoomMode = buttonZoomMode;
 
-    let currentZoom = 100;  // 当前缩放百分比，100 = 原始大小
-
-    function applyZoom(newZoom, anchorY) {
-      const scroller = document.getElementById('preview-scroll');
-      const canvas   = document.getElementById('zoom-canvas');
-      if (!canvas || !scroller) return;
-
-      newZoom = Math.max(30, Math.min(500, Math.round(newZoom)));
-      if (newZoom === currentZoom) return;
-
-      // 锚点：视口内哪个 Y 坐标的内容要保持不动
-      // 传入 anchorY（鼠标位置）；不传则用视口中心
-      const ay = (anchorY !== undefined) ? anchorY : scroller.clientHeight / 2;
-
-      // 缩放前，锚点对应的内容坐标 = scrollTop + ay
-      // （scrollTop 和 ay 都在"已缩放"坐标系里，二者一致）
-      const anchorContent = scroller.scrollTop + ay;
-
-      const ratio = newZoom / currentZoom;
-      currentZoom = newZoom;
-      canvas.style.zoom = currentZoom / 100;
-
-      // 读 scrollHeight 触发同步 layout reflow，确保 zoom 已生效
-      void scroller.scrollHeight;
-
-      // 缩放后同一内容点在新坐标系里的位置 = anchorContent * ratio
-      // 要让它仍出现在视口的 ay 处：scrollTop = anchorContent * ratio - ay
-      scroller.scrollTop = anchorContent * ratio - ay;
-
-      const zv = document.getElementById('zoom-value');
-      if (zv) zv.textContent = currentZoom + '%';
+    function updateZoomStageHeight() {
+      if (zoomMode === 'canvas') {
+        // transform 不参与布局。向上取整，避免滚动到底端时裁掉最后一行像素。
+        zoomStage.style.height = Math.ceil(zoomCanvas.getBoundingClientRect().height) + 'px';
+      }
     }
 
-    // 工具栏 +/- 以视口中心为锚点
-    const scrollEl = document.getElementById('preview-scroll');
+    function renderZoom() {
+      const scale = currentZoom / 100;
+      zoomStage.dataset.mode = zoomMode;
+      zoomStage.style.setProperty('--preview-scale', scale);
+      zoomCanvas.style.zoom = zoomMode === 'text' ? scale : '';
+      if (zoomMode === 'text') zoomStage.style.height = '';
+      updateZoomStageHeight();
+      zoomValue.textContent = Math.round(currentZoom) + '%';
+    }
+
+    function applyZoom(percent, mode = zoomMode, anchor) {
+      const nextZoom = Math.max(30, Math.min(500, percent));
+      if (nextZoom === currentZoom && mode === zoomMode) return;
+      const viewport = scrollEl.getBoundingClientRect();
+      const x = anchor?.clientX ?? viewport.left + scrollEl.clientWidth / 2;
+      const y = anchor?.clientY ?? viewport.top + scrollEl.clientHeight / 2;
+      const before = zoomCanvas.getBoundingClientRect();
+      const ratio = nextZoom / currentZoom;
+
+      currentZoom = nextZoom;
+      zoomMode = mode;
+      renderZoom();
+
+      const after = zoomCanvas.getBoundingClientRect();
+      scrollEl.scrollLeft += after.left + (x - before.left) * ratio - x;
+      scrollEl.scrollTop += after.top + (y - before.top) * ratio - y;
+    }
+
+    renderZoom();
+    // 文档刷新、图片加载和侧栏宽度变化都可能改变正文的自然高度。
+    new ResizeObserver(updateZoomStageHeight).observe(zoomCanvas);
+
+    zoomModeSelect.addEventListener('change', () => {
+      buttonZoomMode = zoomModeSelect.value;
+      applyZoom(currentZoom, buttonZoomMode);
+      try {
+        vscode.setState?.({ ...vscode.getState?.(), zoomMode: buttonZoomMode });
+      } catch (_) {}
+    });
     document.getElementById('btn-zoom-in').addEventListener('click', () => {
-      applyZoom(currentZoom + 10);
+      applyZoom(currentZoom + 10, buttonZoomMode);
     });
     document.getElementById('btn-zoom-out').addEventListener('click', () => {
-      applyZoom(currentZoom - 10);
+      applyZoom(currentZoom - 10, buttonZoomMode);
     });
     document.getElementById('btn-zoom-reset').addEventListener('click', () => {
-      currentZoom = 100;
-      document.getElementById('zoom-canvas').style.zoom = 1;
-      document.getElementById('preview-scroll').scrollTop = 0;
-      const zv = document.getElementById('zoom-value');
-      if (zv) zv.textContent = '100%';
+      applyZoom(100);
+      scrollEl.scrollTo(0, 0);
     });
 
-    // 触控板双指捏合 / Ctrl+滚轮 → 以鼠标位置为锚点
-    // macOS 触控板 pinch 会触发 ctrlKey=true 的 wheel 事件，deltaY 是小数
-    // 普通鼠标滚轮 deltaY 通常是 ±100，用比例因子统一处理
+    // Chromium 将触控板捏合转换成带 ctrlKey 的 wheel 事件。
+    // 捏合始终放大画布，工具栏的文字缩放偏好不改变手势行为。
     scrollEl.addEventListener('wheel', (e) => {
-      if (!e.ctrlKey && !e.metaKey) return;
+      if ((!e.ctrlKey && !e.metaKey) || !e.deltaY) return;
       e.preventDefault();
-      const rect   = scrollEl.getBoundingClientRect();
-      const mouseY = e.clientY - rect.top;
-      // 触控板 pinch: deltaY 是小数（±1~5），鼠标滚轮: ±100~120
-      // 统一换算为缩放比例：每 100 deltaY 对应 20% 变化
-      const factor = Math.abs(e.deltaY) < 10
-        ? e.deltaY * 0.5          // 触控板：精细控制
-        : e.deltaY > 0 ? 10 : -10; // 鼠标滚轮：固定步长
-      applyZoom(currentZoom - factor, mouseY);
-    }, { passive: false });
+      const pixels = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? scrollEl.clientHeight : 1);
+      const step = Math.max(-10, Math.min(10, pixels * 0.5));
+      applyZoom(currentZoom - step, 'canvas', e);
+    }, { capture: true, passive: false });
 
     // ─── 表格显示模式：横向滚动 ↔ 完整显示 ───
     // 横向滚动（默认）：宽表格在正文宽度内滚动，不撑宽整页排版
@@ -4379,7 +4393,7 @@
     if (tableModeBtn) {
       tableModeBtn.addEventListener('click', () => {
         tablesExpanded = !tablesExpanded;
-        if (vscode.setState) vscode.setState({ tablesExpanded });
+        if (vscode.setState) vscode.setState({ ...vscode.getState?.(), tablesExpanded });
         applyTableMode();
         showToast(tablesExpanded ? '表格：完整显示' : '表格：横向滚动', '', 1500);
       });
@@ -4392,7 +4406,7 @@
       tableExpandChk.checked = !!tablesExpanded;
       tableExpandChk.addEventListener('change', () => {
         tablesExpanded = tableExpandChk.checked;
-        if (vscode.setState) vscode.setState({ tablesExpanded });
+        if (vscode.setState) vscode.setState({ ...vscode.getState?.(), tablesExpanded });
         applyTableMode();
         showToast(tablesExpanded ? '宽表格完整显示' : '宽表格横向滚动', 'success');
       });
@@ -4409,12 +4423,11 @@
     // 「← 编辑器」按钮：找预览视口内第一个可见标题，把其行号发给 extension
     document.getElementById('btn-sync-to-editor').addEventListener('click', () => {
       const scroller = document.getElementById('preview-scroll');
-      const scrollTop = scroller.scrollTop;
+      const visibleTop = scroller.getBoundingClientRect().top;
       const headings = Array.from(document.querySelectorAll('#preview-content [data-source-line]'));
       let best = null;
       for (const el of headings) {
-        const top = el.offsetTop; // CSS zoom 下 offsetTop 已是缩放后坐标，与 scrollTop 一致
-        if (top <= scrollTop + 80) {
+        if (el.getBoundingClientRect().top <= visibleTop + 80) {
           best = el; // 更新到最后一个在视口上方的标题
         } else {
           break; // 已过了视口上沿，停止

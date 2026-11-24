@@ -30,10 +30,10 @@
 ext install marsggbo.markdown2anything
 ```
 
-本地 5.0.0 安装包可通过扩展面板的「从 VSIX 安装…」选择，或在安装包目录运行：
+从 [GitHub Releases](https://github.com/marsggbo/markdown2anything/releases) 下载 5.0.1 安装包，通过扩展面板的「从 VSIX 安装…」选择，或在安装包目录运行：
 
 ```bash
-code --install-extension ./markdown2anything-5.0.0.vsix
+code --install-extension ./markdown2anything-5.0.1.vsix
 ```
 
 **2. 打开预览**
@@ -190,7 +190,9 @@ AI 把长文拆成串推 thread，每条控制在 280 字内，配图自动按�
 
 内置主题涵盖：微信经典 / Claude Pro / Medium 编辑 / 简约蓝 / 科技博客 / 知乎 / 极简黑白 / 春日清新 / 学术论文 / 小红书 / Notion / 深夜极客 / macOS 简约 / 暖色知识
 
-- **双模式缩放**：工具栏 `+/-` 整体缩放；`Ctrl+滚轮` 以鼠标为锚点局部放大
+- **触控板捏合**：指针位于预览区时，捏合使用画布缩放。图片、文字和表格等比例缩放，正文保留原有换行。放大后可横向、纵向滚动查看细节。`Ctrl` / `Cmd` + 滚轮也可缩放画布。
+- **工具栏缩放**：`+` / `−` 可选择「画布缩放」或「文字缩放」。文字缩放会重新排版。
+- **宽表格预览**：表格在正文内横向滚动，长说明可以换行。点击「▦ 滚动 / 展开」切换单元格是否展开。
 - **双向定位**：`→ 预览` 跳到光标段落，`← 编辑` 跳回对应行
 - **自定义样式**：内置 CSS 速查表 + AI 提示语，直接让 Claude / ChatGPT 生成主题
 

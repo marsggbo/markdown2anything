@@ -44,7 +44,7 @@ console.log(`\n📦 双发发布 v${version}：${PRIMARY} + ${LEGACY}\n`);
 // ── 1. 前置检查 ──
 try {
   const status = shOut('git status --porcelain');
-  if (status.trim()) {
+  if (!buildOnly && status.trim()) {
     console.error('❌ 工作区不干净，请先提交所有改动：\n' + status);
     process.exit(1);
   }
@@ -79,7 +79,7 @@ if (!skipBuild) {
   fs.mkdirSync(TMP, { recursive: true });
 
   // 复制关键文件（node_modules 依赖也要带上，否则 vsce 打包后运行时缺依赖）
-  const copyDirs = ['lib', 'scripts', 'webview', 'templates', 'ppt-themes', 'skills', 'cli', 'images', 'electron', 'node_modules'];
+  const copyDirs = ['lib', 'scripts', 'webview', 'templates', 'ppt-themes', 'skills', 'cli', 'images', 'assets', 'web', 'electron', 'node_modules'];
   const copyFiles = ['extension.js', 'package.json', 'README.md', 'CHANGELOG.md', 'icon.png', 'LICENSE', '.vscodeignore'];
   for (const d of copyDirs) {
     if (fs.existsSync(path.join(root, d))) {
@@ -102,10 +102,10 @@ if (!skipBuild) {
         const before = c;
         // 1) name 字段：markdown2anything → md2wechat
         c = c.split(`"name": "${PRIMARY}"`).join(`"name": "${LEGACY}"`);
-        // 2) 前缀 markdown2anything. → md2wechat. （命令/配置/secret key/仓库名等）
-        c = c.split(PRIMARY + '.').join(LEGACY + '.');
-        // 3) 其余裸词（如脚本里的插件名文案、下载文件名）
+        // 2) 替换扩展前缀及对应的安装指令和文件名。
         c = c.split(PRIMARY).join(LEGACY);
+        // 两个扩展共用 GitHub 仓库和 Release。
+        c = c.replace(/((?:github\.com|raw\.githubusercontent\.com)\/marsggbo\/)md2wechat\b/g, '$1markdown2anything');
         if (c !== before) fs.writeFileSync(full, c);
       }
     }
