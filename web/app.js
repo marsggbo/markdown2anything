@@ -88,6 +88,7 @@ def summarize(md):
     currentTitle = r.title;
     currentBodyHtml = r.bodyHtml;
     previewContent.innerHTML = r.bodyHtml;
+    M2A.renderMermaidDiagrams(previewContent).catch(() => {});
     docTitle.textContent = '预览：' + (currentTitle || '未命名');
     // 表格模式按钮（web 简化：自动包裹）
   }

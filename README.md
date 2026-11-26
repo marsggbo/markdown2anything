@@ -30,10 +30,10 @@
 ext install marsggbo.markdown2anything
 ```
 
-从 [GitHub Releases](https://github.com/marsggbo/markdown2anything/releases) 下载 5.0.1 安装包，通过扩展面板的「从 VSIX 安装…」选择，或在安装包目录运行：
+从 [GitHub Releases](https://github.com/marsggbo/markdown2anything/releases) 下载 5.0.2 安装包，通过扩展面板的「从 VSIX 安装…」选择，或在安装包目录运行：
 
 ```bash
-code --install-extension ./markdown2anything-5.0.1.vsix
+code --install-extension ./markdown2anything-5.0.2.vsix
 ```
 
 **2. 打开预览**
@@ -221,7 +221,15 @@ AI 把长文拆成串推 thread，每条控制在 280 字内，配图自动按�
 
 不装 VS Code 也能写：**[https://marsggbo.github.io/markdown2anything/](https://marsggbo.github.io/markdown2anything/)**
 
-浏览器打开即用：CodeMirror 双栏编辑 + 实时预览（公式/代码/图片/表格），支持微信/知乎一键复制、小红书长图导出、图片插入（文件/粘贴/URL）、自动保存、14 套主题。
+浏览器打开即用：CodeMirror 双栏编辑 + 实时预览（公式/代码/图片/表格/Mermaid），支持微信/知乎一键复制、小红书长图导出、图片插入（文件/粘贴/URL）、自动保存、14 套主题。
+
+### Markdown 增强语法
+
+- Mermaid 图表：使用 `mermaid` 代码块，预览和导出生成 SVG。
+- Callout：使用 `::: tip`、`::: warning`、`::: danger`、`::: success` 等容器。
+- 脚注：使用 `正文[^1]` 和文末 `[^1]: 脚注内容`。
+- 图片尺寸与对齐：支持 `![架构图](diagram.png){width=70% align=center}`。
+- 代码块增强：支持 `filename=app.js`、`line-numbers`，用于显示文件名和行号。
 
 ## 🖥️ Electron 桌面版（macOS dmg）
 

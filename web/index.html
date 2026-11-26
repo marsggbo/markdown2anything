@@ -68,6 +68,17 @@
     #preview-scroll { flex: 1; overflow: auto; background: #fff; }
     .zoom-canvas { width: 100%; max-width: 70%; margin: 0 auto; }
     .article-wrapper { width: 100%; padding: 32px 28px; min-height: 100vh; }
+    .article-wrapper .mermaid-diagram { max-width: 100%; overflow-x: auto; margin: 1.2em 0; text-align: center; }
+    .article-wrapper .mermaid-diagram svg { max-width: none; min-width: 420px; height: auto; display: inline-block; }
+    .article-wrapper .callout { margin: 1em 0; padding: 12px 16px; border-left: 4px solid #6b7280; border-radius: 4px; background: rgba(107,114,128,.1); }
+    .article-wrapper .callout-warning { border-color: #d97706; background: rgba(217,119,6,.1); }
+    .article-wrapper .callout-danger { border-color: #dc2626; background: rgba(220,38,38,.1); }
+    .article-wrapper .callout-success { border-color: #16a34a; background: rgba(22,163,74,.1); }
+    .article-wrapper .callout-tip { border-color: #2563eb; background: rgba(37,99,235,.1); }
+    .article-wrapper .footnotes { margin-top: 2.5em; font-size: .9em; color: #666; }
+    .article-wrapper .footnote-ref { font-size: .75em; vertical-align: super; }
+    .article-wrapper .code-line { display: block; }
+    .article-wrapper .code-line-number { display: inline-block; width: 2.5em; margin-right: 1em; color: #999; text-align: right; user-select: none; }
     /* toast */
     #toast {
       position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 999;
