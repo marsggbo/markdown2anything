@@ -2,7 +2,7 @@
 
 **写一次，发到所有平台。**
 
-微信公众号 · 知乎 · 博客园 · 小红书 · Twitter · PPT · Word——在 VS Code 中完成排版、截图、AI 文案、平台同步与导出。
+微信公众号 · 知乎 · 博客园 · 小红书 · Twitter · PDF · PPT · Word——在 VS Code 中完成排版、截图、AI 文案、平台同步与导出。
 
 ---
 
@@ -30,10 +30,10 @@
 ext install marsggbo.markdown2anything
 ```
 
-从 [GitHub Releases](https://github.com/marsggbo/markdown2anything/releases) 下载 5.0.2 安装包，通过扩展面板的「从 VSIX 安装…」选择，或在安装包目录运行：
+从 [GitHub Releases](https://github.com/marsggbo/markdown2anything/releases) 下载 5.0.3 安装包，通过扩展面板的「从 VSIX 安装…」选择，或在安装包目录运行：
 
 ```bash
-code --install-extension ./markdown2anything-5.0.2.vsix
+code --install-extension ./markdown2anything-5.0.3.vsix
 ```
 
 **2. 打开预览**
@@ -177,12 +177,13 @@ AI 把长文拆成串推 thread，每条控制在 280 字内，配图自动按�
 
 | 格式 | 引擎 | 特点 |
 |------|------|------|
+| **PDF** | Chromium（Playwright） | **严格跟随当前预览主题**（含暗色/暖色背景整页铺满与自定义 CSS），矢量公式、代码高亮、Mermaid、图片完整保留；支持 A4 / Letter / 无分页长页与页码 |
 | PPT（Slidev） | Playwright | 视觉最佳，代码高亮 / 公式 / 图片完整 |
 | PPT（Marp） | npx（无需安装） | 轻量，3 套主题，秒出 |
 | PPT / Word（Pandoc） | pandoc（自动下载） | 真正可编辑的 PPTX / DOCX，公式用 OMML |
 | HTML | 内置 | 带内联样式，保存到 md 同目录 |
 
-依赖首次使用时自动下载到 VS Code globalStorage，不污染项目目录。
+在预览面板右上角点击 **「💾 导出」→「📕 PDF」**，或在 `.md` 文件右键 / 命令面板运行 `markdown2anything: 导出 PDF 文件（跟随当前预览主题）` 即可一键生成同名 `.pdf`。依赖首次使用时自动下载到缓存目录，不污染项目目录。
 
 ---
 
@@ -239,6 +240,7 @@ AI 把长文拆成串推 thread，每条控制在 280 字内，配图自动按�
 - 右侧完整工具栏：微信 / 知乎 / 小红书 / 推文 / 封面 / 导出
 - 实时预览：输入即渲染，**切换主题立即生效**（14 套主题），公式 / 代码 / 表格 / 图片完整支持
 - 微信、知乎一键复制（带内联样式 HTML，粘贴即用）
+- **主题一致 PDF 导出**（支持 A4 / Letter / 无分页长页，与当前所选预览主题保持一致）
 - 小红书 **Playwright 多图导出**（真实浏览器渲染，1080×1440 自动分片）
 - 本地文件打开 / 保存 / 自动记忆
 

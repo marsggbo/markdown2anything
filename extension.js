@@ -7,8 +7,9 @@ const os = require('os');
 const https = require('https');
 const crypto = require('crypto');
 
-const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtmlByMode, inlineRemoteImages } = require('./lib/converter');
+const { renderMarkdown, buildFullHtml, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtmlByMode, buildPdfHtml, inlineRemoteImages } = require('./lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('./lib/themes');
+const pdfExporter = require('./lib/pdf');
 const zhihu = require('./lib/zhihu');
 const llm = require('./lib/llm');
 const social = require('./lib/social');
@@ -64,6 +65,7 @@ function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand('markdown2anything.preview', handlePreview),
     vscode.commands.registerCommand('markdown2anything.convert', handleConvert),
+    vscode.commands.registerCommand('markdown2anything.exportPdf', handleExportPdfCommand),
     vscode.commands.registerCommand('markdown2anything.syncPublish', uri => publishingHost.open(uri)),
     vscode.commands.registerCommand('markdown2anything.syncWechat', uri => publishingHost.open(uri, { platform: 'wechat' })),
     vscode.commands.registerCommand('markdown2anything.syncZhihu', uri => publishingHost.open(uri, { platform: 'zhihu' })),
@@ -319,21 +321,21 @@ async function ensureBrowserRuntime(panel, executablePath, progressType = 'cover
 /**
  * 用 playwright-core CLI 自动安装 Chromium，实时转发进度到 webview
  */
-function installChromium(panel) {
+function installChromium(panel, onProgress) {
   return new Promise((resolve) => {
     const { spawn } = require('child_process');
     const cliPath = path.join(
       extContext.extensionUri.fsPath, 'node_modules', 'playwright-core', 'lib', 'cli', 'program.js'
     );
     const proc = spawn(process.execPath, [cliPath, 'install', 'chromium'], { env: NODE_EXEC_ENV });
-    proc.stdout.on('data', d => {
+    const emit = (d) => {
       const line = d.toString().trim();
-      if (line) panel.webview.postMessage({ type: 'xhsPythonProgress', message: '📥 ' + line });
-    });
-    proc.stderr.on('data', d => {
-      const line = d.toString().trim();
-      if (line) panel.webview.postMessage({ type: 'xhsPythonProgress', message: '📥 ' + line });
-    });
+      if (!line) return;
+      if (panel) panel.webview.postMessage({ type: 'xhsPythonProgress', message: '📥 ' + line });
+      if (typeof onProgress === 'function') onProgress('📥 ' + line);
+    };
+    proc.stdout.on('data', emit);
+    proc.stderr.on('data', emit);
     proc.on('close', () => resolve());
     proc.on('error', () => resolve()); // 即使失败也继续尝试
   });
@@ -1799,6 +1801,11 @@ async function handleWebviewMessage(msg, panel, mdPath) {
       break;
     }
 
+    case 'exportPdf': {
+      await handleExportPdf(msg, panel, mdPath);
+      break;
+    }
+
     default:
       break;
   }
@@ -2735,6 +2742,165 @@ async function handleExportWord(msg, panel, mdPath) {
   } catch (err) {
     log(`Word 导出失败: ${err.message}`);
     panel.webview.postMessage({ type: 'wordResult', success: false, error: err.message });
+  }
+}
+
+// ─────────────────────────────────────────────
+//  PDF 导出（Playwright Chromium，严格保持当前预览主题与自定义样式）
+// ─────────────────────────────────────────────
+
+function resolvePdfOutputPath(mdPath, customOutputPath) {
+  const mdDir = path.dirname(mdPath);
+  const base = path.basename(mdPath, path.extname(mdPath));
+  const raw = String(customOutputPath || '').trim();
+  if (!raw) return path.join(mdDir, `${base}.pdf`);
+
+  let resolved = path.isAbsolute(raw) ? raw : path.join(mdDir, raw);
+  if (raw.endsWith('/') || raw.endsWith('\\') || (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory())) {
+    return path.join(resolved, `${base}.pdf`);
+  }
+  if (!/\.pdf$/i.test(resolved)) resolved += '.pdf';
+  return resolved;
+}
+
+async function exportPdfForMarkdown(mdPath, opts = {}) {
+  const {
+    themeId = currentThemeId,
+    customCss = '',
+    format = 'A4',
+    marginPreset = 'normal',
+    pageNumbers = false,
+    outputPath = '',
+    panel = null,
+    onProgress = () => {},
+  } = opts;
+
+  const theme = getTheme(themeId || currentThemeId);
+  const outFile = resolvePdfOutputPath(mdPath, outputPath);
+
+  onProgress(`⏳ 正在按「${theme.name}」主题解析与排版...`);
+  const { bodyHtml, title } = renderMarkdown(mdPath);
+  const inlinedBody = await inlineRemoteImages(bodyHtml);
+
+  const htmlContent = buildPdfHtml(inlinedBody, path.dirname(mdPath), theme, {
+    customCss,
+    title,
+    format,
+    marginPreset,
+    pageNumbers,
+  });
+
+  let executablePath = findCoverChromium();
+  if (!executablePath) {
+    onProgress('📥 首次使用，正在下载 Chromium 渲染引擎（约 150MB）...');
+    await installChromium(panel, onProgress);
+    executablePath = findCoverChromium();
+    if (!executablePath) {
+      throw new Error(missingBrowserMessage());
+    }
+  }
+  if (panel) {
+    await ensureBrowserRuntime(panel, executablePath, 'pdfProgress');
+  }
+
+  try {
+    await pdfExporter.exportHtmlToPdf({
+      htmlContent,
+      outFile,
+      executablePath,
+      format,
+      pageNumbers,
+      bgColor: theme.wrapperBg || '#ffffff',
+      onProgress,
+    });
+  } catch (err) {
+    throw new Error(browserErrorMessage(err));
+  }
+
+  return { outFile, theme };
+}
+
+async function handleExportPdf(msg, panel, mdPath) {
+  const notify = (message) => {
+    if (panel) panel.webview.postMessage({ type: 'pdfProgress', message });
+  };
+  try {
+    log(`开始导出 PDF: ${mdPath} (theme=${msg.themeId || currentThemeId})`);
+    const { outFile, theme } = await exportPdfForMarkdown(mdPath, {
+      themeId: msg.themeId || currentThemeId,
+      customCss: msg.customCss || '',
+      format: msg.format || 'A4',
+      marginPreset: msg.marginPreset || 'normal',
+      pageNumbers: !!msg.pageNumbers,
+      outputPath: msg.outputPath || '',
+      panel,
+      onProgress: notify,
+    });
+
+    log(`PDF 导出成功 (${theme.id}): ${outFile}`);
+    if (panel) {
+      panel.webview.postMessage({
+        type: 'pdfResult',
+        success: true,
+        filename: path.basename(outFile),
+        outPath: outFile,
+        themeName: theme.name,
+      });
+    }
+    const action = await vscode.window.showInformationMessage(
+      `✅ PDF 已生成（${theme.name}）：${outFile}`,
+      '打开文件',
+      '打开目录',
+    );
+    if (action === '打开文件') {
+      vscode.env.openExternal(vscode.Uri.file(outFile));
+    } else if (action === '打开目录') {
+      vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(outFile));
+    }
+  } catch (err) {
+    log(`PDF 导出失败: ${err.message}`);
+    if (panel) {
+      panel.webview.postMessage({ type: 'pdfResult', success: false, error: err.message });
+    }
+    vscode.window.showErrorMessage(`PDF 导出失败: ${err.message}`);
+  }
+}
+
+async function handleExportPdfCommand(uri) {
+  const mdPath = await resolveMdFilePath(uri);
+  if (!mdPath) return;
+
+  const panel = previewPanels.get(mdPath) || null;
+  try {
+    const result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `正在导出 PDF（${getTheme(currentThemeId).name}）`,
+        cancellable: false,
+      },
+      async (progress) => {
+        return exportPdfForMarkdown(mdPath, {
+          themeId: currentThemeId,
+          panel,
+          onProgress: (msg) => progress.report({ message: msg.replace(/^⏳\s*/, '') }),
+        });
+      },
+    );
+
+    log(`PDF 命令导出成功 (${result.theme.id}): ${result.outFile}`);
+    const action = await vscode.window.showInformationMessage(
+      `✅ PDF 已生成（${result.theme.name}）：${result.outFile}`,
+      '打开文件',
+      '打开目录',
+    );
+    if (action === '打开文件') {
+      vscode.env.openExternal(vscode.Uri.file(result.outFile));
+    } else if (action === '打开目录') {
+      vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(result.outFile));
+    }
+  } catch (err) {
+    log(`PDF 命令导出失败: ${err.message}`);
+    vscode.window.showErrorMessage(`PDF 导出失败: ${err.message}`);
   }
 }
 

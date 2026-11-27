@@ -910,6 +910,8 @@
     .btn-ppt:hover  { background: #6d28d9; }
     .btn-word { background: #1d4ed8; color: #fff; }
     .btn-word:hover { background: #1e40af; }
+    .btn-pdf  { background: #dc2626; color: #fff; }
+    .btn-pdf:hover  { background: #b91c1c; }
 
     /* ── 下拉菜单（平台聚合按钮） ── */
     .dropdown { position: relative; display: inline-flex; flex-shrink: 0; }
@@ -1146,6 +1148,13 @@
             title="绝对路径或相对于 md 文件的路径，如 ../out/article.html">
         </div>
         <div class="dropdown-divider"></div>
+        <button class="dropdown-item" id="btn-pdf">
+          <span class="item-icon">📕</span>
+          <span class="dropdown-item-content">
+            <span class="item-label">PDF</span>
+            <span class="item-desc">跟随当前预览主题样式，支持公式/代码/暗色背景</span>
+          </span>
+        </button>
         <button class="dropdown-item" id="btn-ppt">
           <span class="item-icon">📊</span>
           <span class="dropdown-item-content">
@@ -1940,6 +1949,50 @@
       </div>
     </div>
 
+    <!-- PDF 导出面板 -->
+    <div class="side-panel" id="pdf-panel">
+      <div class="resize-handle" id="pdf-resize-handle" title="按住左右拖动调整面板宽度"></div>
+      <div class="side-panel-header">📕 导出 PDF<button class="panel-close-btn" data-close-panel="pdf-panel" data-close-state="pdfPanelOpen">×</button></div>
+      <div class="side-panel-body">
+        <p class="hint">将当前 Markdown 导出为矢量排版 PDF，完全保留预览主题配色、背景、KaTeX 公式、代码高亮与自定义样式。</p>
+
+        <div style="margin-top:10px;padding:9px 12px;background:#242424;border:1px solid #3a3a3a;border-radius:6px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <span style="font-size:12px;color:#999;">当前导出主题</span>
+          <strong id="pdf-current-theme" style="font-size:12.5px;color:#eee;">跟随预览主题</strong>
+        </div>
+        <p class="hint" style="margin-top:4px;">切换左上角「主题」下拉框即可实时改变导出的 PDF 风格。</p>
+
+        <label style="margin-top:12px;">页面规格</label>
+        <select id="pdf-format" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;">
+          <option value="A4" selected>A4 标准分页（推荐，适合打印与分享）</option>
+          <option value="Letter">Letter 信纸分页</option>
+          <option value="continuous">无分页长页（一页到底，适合手机阅读）</option>
+        </select>
+
+        <label style="margin-top:12px;">页边距</label>
+        <select id="pdf-margin" style="width:100%;padding:7px 10px;background:#2d2d2d;border:1px solid #444;border-radius:4px;color:#e0e0e0;font-size:13px;outline:none;">
+          <option value="normal" selected>标准边距（默认）</option>
+          <option value="compact">紧凑边距（容纳更多内容）</option>
+          <option value="wide">宽松留白</option>
+        </select>
+
+        <label id="pdf-pagenum-row" style="margin-top:12px;display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="pdf-page-numbers" style="width:auto;accent-color:#dc2626;">
+          <span>底部显示页码（1 / N）</span>
+        </label>
+
+        <label style="margin-top:12px;">输出路径（可选）</label>
+        <input type="text" id="pdf-output-path" placeholder="留空默认保存到 MD 同目录同名 .pdf"
+          title="绝对路径或相对于 md 文件的路径，如 ../out/article.pdf">
+
+        <div style="margin-top:16px;display:flex;gap:8px;">
+          <button class="btn btn-pdf" id="btn-pdf-export" style="flex:1;">📕 生成 PDF</button>
+        </div>
+        <p class="hint" id="pdf-progress" style="margin-top:10px;display:none;"></p>
+        <div class="upload-result" id="pdf-result"></div>
+      </div>
+    </div>
+
     <!-- Word 导出面板 -->
     <div class="side-panel" id="word-panel">
       <div class="side-panel-header">📄 导出 Word<button class="panel-close-btn" data-close-panel="word-panel" data-close-state="wordPanelOpen">×</button></div>
@@ -2118,7 +2171,7 @@
     let currentBodyHtml = '';
     let currentThemeBg = '#ffffff';
     // 用对象统一管理面板开关状态，避免 let 变量与 window 属性不同步的 bug
-    const panelState = { stylePanelOpen: false, settingsPanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false, twitterPanelOpen: false, pptPanelOpen: false, wordPanelOpen: false, llmConfigPanelOpen: false, coverPanelOpen: false };
+    const panelState = { stylePanelOpen: false, settingsPanelOpen: false, uploadPanelOpen: false, xhsPanelOpen: false, tocPanelOpen: false, zhihuPublishPanelOpen: false, twitterPanelOpen: false, pptPanelOpen: false, wordPanelOpen: false, pdfPanelOpen: false, llmConfigPanelOpen: false, coverPanelOpen: false };
 
     // 系统出厂默认值（恢复出厂用）
     const XHS_DEFAULTS          = { width: 1080, height: 1440, padding: 40, tolerance: 15, density: 100 };
@@ -2476,6 +2529,7 @@
         { panelId: 'cover-panel',       handleId: 'cover-resize-handle',       defaultW: 480, minW: 340 },
         { panelId: 'twitter-panel',     handleId: 'twitter-resize-handle',     defaultW: 480, minW: 340 },
         { panelId: 'ppt-panel',         handleId: 'ppt-resize-handle',         defaultW: 480, minW: 340 },
+        { panelId: 'pdf-panel',         handleId: 'pdf-resize-handle',         defaultW: 340, minW: 280 },
         { panelId: 'style-panel',       handleId: 'style-resize-handle',       defaultW: 340, minW: 280 },
         { panelId: 'settings-panel',    handleId: 'settings-resize-handle',    defaultW: 340, minW: 280 },
         { panelId: 'llm-config-panel',  handleId: 'llm-resize-handle',         defaultW: 340, minW: 280 },
@@ -2561,7 +2615,7 @@
         ['btn-dd-wechat',  'btn-primary',   panelState.uploadPanelOpen],
         ['btn-dd-zhihu',   'btn-zhihu',     panelState.zhihuPublishPanelOpen],
         ['btn-dd-xhs',     'btn-xhs',       panelState.xhsPanelOpen],
-        ['btn-dd-export',  'btn-secondary', panelState.pptPanelOpen || panelState.wordPanelOpen],
+        ['btn-dd-export',  'btn-secondary', panelState.pdfPanelOpen || panelState.pptPanelOpen || panelState.wordPanelOpen],
       ];
       for (const [id, base, active] of map) {
         const el = document.getElementById(id);
@@ -2643,7 +2697,16 @@
     });
 
     // 主题切换
+    function syncPdfThemeBadge() {
+      const badge = document.getElementById('pdf-current-theme');
+      const sel = document.getElementById('theme-select');
+      if (!badge || !sel) return;
+      const opt = sel.options[sel.selectedIndex];
+      if (opt && opt.value) badge.textContent = opt.textContent;
+    }
+
     document.getElementById('theme-select').addEventListener('change', (e) => {
+      syncPdfThemeBadge();
       vscode.postMessage({ type: 'setTheme', themeId: e.target.value });
     });
 
@@ -2750,7 +2813,7 @@
     document.getElementById('btn-upload').addEventListener('click', () => {
       closeAllDropdowns();
       togglePanel('upload-panel', 'uploadPanelOpen',
-        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'}]);
+        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'pdf-panel',stateKey:'pdfPanelOpen'}]);
       if (panelState.uploadPanelOpen) {
         const titleInput = document.getElementById('input-title');
         if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
@@ -2773,7 +2836,7 @@
     document.getElementById('btn-zhihu-publish').addEventListener('click', () => {
       closeAllDropdowns();
       togglePanel('zhihu-publish-panel', 'zhihuPublishPanelOpen',
-        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'}]);
+        [{panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'pdf-panel',stateKey:'pdfPanelOpen'}]);
       if (panelState.zhihuPublishPanelOpen) {
         const titleInput = document.getElementById('zhihu-input-title');
         if (!titleInput.value && currentTitle) titleInput.value = currentTitle;
@@ -2843,8 +2906,8 @@
       {panelId:'style-panel',stateKey:'stylePanelOpen'},{panelId:'settings-panel',stateKey:'settingsPanelOpen'},{panelId:'upload-panel',stateKey:'uploadPanelOpen'},
       {panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},
       {panelId:'twitter-panel',stateKey:'twitterPanelOpen'},{panelId:'ppt-panel',stateKey:'pptPanelOpen'},
-      {panelId:'word-panel',stateKey:'wordPanelOpen'},{panelId:'llm-config-panel',stateKey:'llmConfigPanelOpen'},
-      {panelId:'cover-panel',stateKey:'coverPanelOpen'}
+      {panelId:'word-panel',stateKey:'wordPanelOpen'},{panelId:'pdf-panel',stateKey:'pdfPanelOpen'},
+      {panelId:'llm-config-panel',stateKey:'llmConfigPanelOpen'},{panelId:'cover-panel',stateKey:'coverPanelOpen'}
     ];
 
     // ─── 小红书 ───
@@ -2870,6 +2933,11 @@
     });
 
     // ─── 导出格式 ───
+    document.getElementById('btn-pdf').addEventListener('click', () => {
+      closeAllDropdowns();
+      togglePanel('pdf-panel', 'pdfPanelOpen', _allPanels.filter(p => p.panelId !== 'pdf-panel'));
+      if (panelState.pdfPanelOpen) syncPdfThemeBadge();
+    });
     document.getElementById('btn-ppt').addEventListener('click', () => {
       closeAllDropdowns();
       togglePanel('ppt-panel', 'pptPanelOpen', _allPanels.filter(p => p.panelId !== 'ppt-panel'));
@@ -3484,6 +3552,30 @@
       if (cancel) cancel.style.display = 'none';
     });
 
+    // ─── PDF 导出 ───
+    document.getElementById('pdf-format').addEventListener('change', (e) => {
+      const row = document.getElementById('pdf-pagenum-row');
+      if (row) row.style.display = e.target.value === 'continuous' ? 'none' : 'flex';
+    });
+    document.getElementById('btn-pdf-export').addEventListener('click', () => {
+      const format       = document.getElementById('pdf-format').value || 'A4';
+      const marginPreset = document.getElementById('pdf-margin').value || 'normal';
+      const pageNumbers  = format !== 'continuous' && document.getElementById('pdf-page-numbers').checked;
+      const outputPath   = (document.getElementById('pdf-output-path').value || '').trim();
+      const themeSel     = document.getElementById('theme-select');
+      const themeId      = (themeSel && themeSel.value) ? themeSel.value : '';
+      const customStyle  = document.getElementById('custom-style');
+      const customCss    = customStyle ? (customStyle.textContent || '') : '';
+
+      const btn    = document.getElementById('btn-pdf-export');
+      const prog   = document.getElementById('pdf-progress');
+      const result = document.getElementById('pdf-result');
+      btn.disabled = true; btn.textContent = '⏳ 生成中...';
+      prog.style.display = 'block'; prog.textContent = '⏳ 正在按当前预览主题渲染 PDF...';
+      result.style.display = 'none';
+      vscode.postMessage({ type: 'exportPdf', themeId, customCss, format, marginPreset, pageNumbers, outputPath });
+    });
+
     // ─── Word 导出 ───
     document.getElementById('btn-word-export').addEventListener('click', () => {
       const mathFmt = document.getElementById('word-math').value;
@@ -3557,14 +3649,12 @@
     });
 
     document.getElementById('btn-style').addEventListener('click', () => {
-      togglePanel('style-panel', 'stylePanelOpen',
-        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'settings-panel',stateKey:'settingsPanelOpen'}]);
+      togglePanel('style-panel', 'stylePanelOpen', _allPanels.filter(p => p.panelId !== 'style-panel'));
     });
 
     // ─── 设置面板 ───
     document.getElementById('btn-settings').addEventListener('click', () => {
-      togglePanel('settings-panel', 'settingsPanelOpen',
-        [{panelId:'upload-panel',stateKey:'uploadPanelOpen'},{panelId:'xhs-panel',stateKey:'xhsPanelOpen'},{panelId:'zhihu-publish-panel',stateKey:'zhihuPublishPanelOpen'},{panelId:'style-panel',stateKey:'stylePanelOpen'}]);
+      togglePanel('settings-panel', 'settingsPanelOpen', _allPanels.filter(p => p.panelId !== 'settings-panel'));
     });
 
     // 打开自定义样式面板（从设置面板跳转）
@@ -3686,6 +3776,7 @@
           // 应用主题
           if (msg.theme) {
             applyTheme(msg.theme);
+            syncPdfThemeBadge();
           }
           // 填充标题输入框（如果为空）
           const titleInput = document.getElementById('input-title');
@@ -3728,6 +3819,7 @@
             if (t.id === msg.currentId) opt.selected = true;
             sel.appendChild(opt);
           });
+          syncPdfThemeBadge();
           break;
         }
         case 'error': {
@@ -4219,6 +4311,32 @@
             } else {
               res.className = 'upload-result error';
               res.textContent = `❌ 生成失败：${msg.error || '未知错误'}`;
+            }
+            res.style.display = 'block';
+          }
+          break;
+        }
+
+        case 'pdfProgress': {
+          const prog = document.getElementById('pdf-progress');
+          if (prog) { prog.style.display = 'block'; prog.textContent = msg.message || ''; }
+          break;
+        }
+        case 'pdfResult': {
+          const btn = document.getElementById('btn-pdf-export');
+          if (btn) { btn.disabled = false; btn.textContent = '📕 生成 PDF'; }
+          const prog = document.getElementById('pdf-progress');
+          if (prog) prog.style.display = 'none';
+          const res = document.getElementById('pdf-result');
+          if (res) {
+            if (msg.success) {
+              res.className = 'upload-result success';
+              res.textContent = `✅ 已生成（${msg.themeName || '当前主题'}）：${msg.filename || 'output.pdf'}`;
+              showToast('PDF 已生成！', 'success');
+            } else {
+              res.className = 'upload-result error';
+              res.textContent = `❌ 生成失败：${msg.error || '未知错误'}`;
+              showToast('PDF 生成失败', 'error');
             }
             res.style.display = 'block';
           }

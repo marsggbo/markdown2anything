@@ -1,8 +1,8 @@
 {
   "name": "markdown2anything",
   "displayName": "Markdown2Anything — 微信/知乎/博客园多平台同步",
-  "description": "Markdown 多平台同步：公众号草稿、知乎官方发布、博客园草稿与发布，图片自动上传并保留原位，预览确认后提交。保留小红书/Twitter、LaTeX 公式、主题与实时预览。",
-  "version": "5.0.2",
+  "description": "Markdown 多平台同步：公众号草稿、知乎官方发布、博客园草稿与发布，图片自动上传并保留原位，预览确认后提交。支持主题一致 PDF/PPT/Word/HTML 导出、小红书/Twitter、LaTeX 公式与实时预览。",
+  "version": "5.0.3",
   "publisher": "marsggbo",
   "license": "MIT",
   "icon": "icon.png",
@@ -36,6 +36,7 @@
     "文案生成",
     "LaTeX",
     "KaTeX",
+    "PDF",
     "preview",
     "export"
   ],
@@ -48,6 +49,7 @@
     "onLanguage:markdown",
     "onCommand:markdown2anything.preview",
     "onCommand:markdown2anything.convert",
+    "onCommand:markdown2anything.exportPdf",
     "onCommand:markdown2anything.syncPublish",
     "onCommand:markdown2anything.syncWechat",
     "onCommand:markdown2anything.syncZhihu",
@@ -90,6 +92,12 @@
         "title": "导出微信公众号 HTML 文件",
         "category": "markdown2anything",
         "icon": "$(export)"
+      },
+      {
+        "command": "markdown2anything.exportPdf",
+        "title": "导出 PDF 文件（跟随当前预览主题）",
+        "category": "markdown2anything",
+        "icon": "$(file-pdf)"
       }
     ],
     "menus": {
@@ -120,6 +128,11 @@
           "command": "markdown2anything.convert",
           "when": "resourceExtname == .md",
           "group": "1_modification"
+        },
+        {
+          "command": "markdown2anything.exportPdf",
+          "when": "resourceExtname == .md",
+          "group": "1_modification"
         }
       ],
       "editor/context": [
@@ -130,6 +143,11 @@
         },
         {
           "command": "markdown2anything.preview",
+          "when": "resourceLangId == markdown",
+          "group": "1_modification"
+        },
+        {
+          "command": "markdown2anything.exportPdf",
           "when": "resourceLangId == markdown",
           "group": "1_modification"
         }

@@ -28,6 +28,7 @@ const FORWARD_CHANNELS = [
   'coverProgress', 'coverResult', 'coverPromptResult', 'coverImageResult',
   'coverHistory', 'coverSaveBgDone', 'coverTitleStateSaved',
   'savePreviewSettingDone',
+  'pdfProgress', 'pdfResult',
 ];
 
 // 顶层主动注册：主进程 → window.postMessage（panel.html 的 message 监听器接收）
@@ -41,7 +42,7 @@ for (const ch of FORWARD_CHANNELS) {
 const SEND_CHANNELS = [
   'editorContentChanged', 'ready', 'getConfig', 'saveConfig',
   'setTheme', 'getWechatHtml', 'getZhihuHtml', 'getXhsCopyHtml',
-  'exportHtml', 'fetchImageBase64', 'generateXhsViaPython',
+  'exportHtml', 'exportPdf', 'fetchImageBase64', 'generateXhsViaPython',
   'saveXhsImages', 'upload', 'todoToggle',
   'newFile', 'openExternal', 'saveFile',
   // 补齐

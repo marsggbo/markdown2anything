@@ -9,8 +9,9 @@ const http = require('http');
 const urlMod = require('url');
 const crypto = require('crypto');
 
-const { renderMarkdown, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtml } = require('../lib/converter');
+const { renderMarkdown, buildWechatCopyHtml, buildZhihuCopyHtml, buildXhsCopyHtml, convertMarkdownToWeChat, buildXhsRenderHtml, buildPdfHtml, inlineRemoteImages } = require('../lib/converter');
 const { THEMES, DEFAULT_THEME_ID, getTheme } = require('../lib/themes');
+const pdfExporter = require('../lib/pdf');
 const cover = require('../lib/cover');
 const coverLlm = require('../lib/cover-llm');
 
@@ -615,6 +616,94 @@ ipcMain.on('zhihuSaveDraft', async (_event, msg) => {
     sendToRenderer('zhihuSaveDraftResult', { success: true, editUrl: (result && result.editUrl) || '' });
   } catch (err) {
     sendToRenderer('zhihuSaveDraftResult', { success: false, error: err.message });
+  }
+});
+
+// ── Export PDF（严格保持当前预览主题与自定义样式）──────────────────
+
+ipcMain.on('exportPdf', async (_event, msg) => {
+  if (!lastBodyHtml) {
+    sendToRenderer('pdfResult', { success: false, error: '请先在左侧编辑器输入内容' });
+    return;
+  }
+
+  try {
+    const opts = msg || {};
+    const theme = getTheme(opts.themeId || currentThemeId);
+    let outFile = String(opts.outputPath || '').trim();
+
+    if (outFile) {
+      const baseDir = currentFilePath ? path.dirname(currentFilePath) : os.homedir();
+      if (!path.isAbsolute(outFile)) outFile = path.join(baseDir, outFile);
+      if (!/\.pdf$/i.test(outFile)) outFile += '.pdf';
+    } else if (currentFilePath) {
+      const base = path.basename(currentFilePath, path.extname(currentFilePath));
+      outFile = path.join(path.dirname(currentFilePath), `${base}.pdf`);
+    } else {
+      const saveRes = await dialog.showSaveDialog(mainWindow, {
+        title: '导出 PDF',
+        defaultPath: 'markdown.pdf',
+        filters: [{ name: 'PDF', extensions: ['pdf'] }],
+      });
+      if (saveRes.canceled || !saveRes.filePath) {
+        sendToRenderer('pdfResult', { success: false, error: '已取消' });
+        return;
+      }
+      outFile = saveRes.filePath;
+    }
+
+    const notify = (m) => sendToRenderer('pdfProgress', { message: m });
+    notify(`⏳ 正在按「${theme.name}」主题解析与排版...`);
+
+    const baseDir = currentFilePath ? path.dirname(currentFilePath) : os.tmpdir();
+    const inlinedBody = await inlineRemoteImages(lastBodyHtml);
+    const htmlContent = buildPdfHtml(inlinedBody, baseDir, theme, {
+      customCss: opts.customCss || '',
+      title: currentFilePath ? path.basename(currentFilePath, path.extname(currentFilePath)) : 'Markdown2Anything',
+      format: opts.format || 'A4',
+      marginPreset: opts.marginPreset || 'normal',
+      pageNumbers: !!opts.pageNumbers,
+    });
+
+    let executablePath = findCoverChromium();
+    if (!executablePath) {
+      notify('📥 首次使用，正在下载 Chromium 渲染引擎...');
+      await installChromium();
+      executablePath = findCoverChromium();
+    }
+    if (!executablePath) {
+      throw new Error('未找到可用的 Chrome / Chromium 浏览器，请安装 Chrome 后重试');
+    }
+
+    await pdfExporter.exportHtmlToPdf({
+      htmlContent,
+      outFile,
+      executablePath,
+      format: opts.format || 'A4',
+      pageNumbers: !!opts.pageNumbers,
+      bgColor: theme.wrapperBg || '#ffffff',
+      onProgress: notify,
+    });
+
+    sendToRenderer('pdfResult', {
+      success: true,
+      filename: path.basename(outFile),
+      outPath: outFile,
+      themeName: theme.name,
+    });
+
+    if (!process.env.M2A_HEADLESS) {
+      const action = await dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'PDF 导出完成',
+        message: `PDF（${theme.name}）已导出到:\n${outFile}`,
+        buttons: ['打开文件', '打开目录', '确定'],
+      });
+      if (action.response === 0) shell.openPath(outFile);
+      else if (action.response === 1) shell.showItemInFolder(outFile);
+    }
+  } catch (err) {
+    sendToRenderer('pdfResult', { success: false, error: err.message });
   }
 });
 
